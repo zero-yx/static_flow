@@ -93,8 +93,6 @@ pub fn init_runtime_logging(service: &str, default_filter: &str) -> Result<Runti
     let (app_writer, app_guard) = non_blocking(app_writer);
     let (access_writer, access_guard) = non_blocking(access_writer);
 
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
     let app_layer = tracing_subscriber::fmt::layer()
         .with_target(true)
         .with_thread_ids(true)
@@ -102,7 +100,8 @@ pub fn init_runtime_logging(service: &str, default_filter: &str) -> Result<Runti
         .with_writer(app_writer)
         .with_ansi(false)
         .compact()
-        .with_filter(filter_fn(|metadata| metadata.target() != "staticflow_access"));
+        .with_filter(filter_fn(|metadata| metadata.target() != "staticflow_access"))
+        .with_filter(runtime_env_filter(default_filter));
     let access_layer = tracing_subscriber::fmt::layer()
         .with_target(true)
         .with_thread_ids(true)
@@ -113,7 +112,6 @@ pub fn init_runtime_logging(service: &str, default_filter: &str) -> Result<Runti
         .with_filter(Targets::new().with_target("staticflow_access", LevelFilter::TRACE));
 
     let registry = tracing_subscriber::registry()
-        .with(env_filter)
         .with(app_layer)
         .with(access_layer);
 
@@ -124,7 +122,8 @@ pub fn init_runtime_logging(service: &str, default_filter: &str) -> Result<Runti
                     .with_target(true)
                     .with_thread_ids(true)
                     .with_thread_names(true)
-                    .compact(),
+                    .compact()
+                    .with_filter(runtime_env_filter(default_filter)),
             )
             .try_init()?;
     } else {
@@ -137,13 +136,67 @@ pub fn init_runtime_logging(service: &str, default_filter: &str) -> Result<Runti
     })
 }
 
+fn runtime_env_filter(default_filter: &str) -> EnvFilter {
+    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::RuntimeLogOptions;
+    use std::{
+        fs,
+        path::Path,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use super::{init_runtime_logging, RuntimeLogOptions};
 
     #[test]
     fn runtime_log_options_default_to_4_files() {
         let opts = RuntimeLogOptions::for_service("backend");
         assert_eq!(opts.max_files, 4);
+    }
+
+    #[test]
+    fn access_logs_are_written_even_when_app_filter_excludes_info() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("static-flow-runtime-log-test-{unique}"));
+        let service = format!("svc-{unique}");
+
+        std::env::set_var("STATICFLOW_LOG_DIR", &root);
+        std::env::set_var("STATICFLOW_LOG_SERVICE", &service);
+        std::env::set_var("STATICFLOW_LOG_STDOUT", "0");
+        std::env::set_var("RUST_LOG", "warn");
+
+        let guards = init_runtime_logging(&service, "warn").expect("init runtime logging");
+        tracing::info!(
+            target: "staticflow_access",
+            request_id = "req-test",
+            path = "/api/articles",
+            "backend access"
+        );
+        drop(guards);
+
+        let access_dir = root.join(&service).join("access");
+        let access_log = read_all_logs(&access_dir);
+        assert!(
+            access_log.contains("backend access"),
+            "expected access log to contain emitted event, got: {access_log:?}"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn read_all_logs(dir: &Path) -> String {
+        let mut contents = String::new();
+        for entry in fs::read_dir(dir).expect("read log dir") {
+            let path = entry.expect("dir entry").path();
+            if path.is_file() {
+                contents.push_str(&fs::read_to_string(path).expect("read log file"));
+            }
+        }
+        contents
     }
 }
