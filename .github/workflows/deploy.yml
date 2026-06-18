@@ -1,9 +1,9 @@
-name: Deploy StaticFlow Frontend (Production)
+name: Deploy StaticFlow Frontend (Personal)
 
 on:
   push:
     branches:
-      - master
+      - personal/site-build
     paths:
       - 'crates/frontend/**'
       - 'crates/shared/src/**'
