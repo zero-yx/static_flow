@@ -82,11 +82,11 @@ jobs:
             echo "No standalone pages found, skipping"
           fi
 
-      - name: Deploy to User Pages (acking-you.github.io)
+      - name: Deploy to User Pages (zero-yx.github.io)
         uses: peaceiris/actions-gh-pages@v3
         with:
           personal_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-          external_repository: acking-you/acking-you.github.io
+          external_repository: zero-yx/zero-yx.github.io
           publish_dir: crates/frontend/dist
           publish_branch: master
           force_orphan: true
