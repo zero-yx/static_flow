@@ -19,6 +19,8 @@ mod kiro_headers;
 mod kiro_latency;
 mod kiro_refresh;
 mod kiro_status;
+/// Keyword moderation gate.
+pub mod moderation;
 mod process_memory;
 /// Provider request entrypoints.
 pub mod provider;
@@ -63,10 +65,11 @@ use llm_access_codex_image::{
 };
 use llm_access_core::store::{
     AdminAccountGroupStore, AdminAnthropicUpstreamStore, AdminCodexAccountStore, AdminConfigStore,
-    AdminKeyStore, AdminKiroAccountStore, AdminProxyStore, AdminReviewQueueStore,
-    PublicAccessStore, PublicCommunityStore, PublicStatusStore, PublicSubmissionStore,
-    PublicUsageStore,
+    AdminKeyStore, AdminKiroAccountStore, AdminModerationStore, AdminProxyStore,
+    AdminReviewQueueStore, PublicAccessStore, PublicCommunityStore, PublicStatusStore,
+    PublicSubmissionStore, PublicUsageStore,
 };
+use moderation::ModerationGate;
 use serde::Serialize;
 use tokio::sync::Semaphore;
 use tower_http::cors::{Any, CorsLayer};
@@ -91,6 +94,8 @@ struct HttpState {
     admin_codex_account_store: Arc<dyn AdminCodexAccountStore>,
     admin_kiro_account_store: Arc<dyn AdminKiroAccountStore>,
     admin_anthropic_upstream_store: Arc<dyn AdminAnthropicUpstreamStore>,
+    admin_moderation_store: Arc<dyn AdminModerationStore>,
+    moderation_gate: Arc<ModerationGate>,
     admin_review_queue_store: Arc<dyn AdminReviewQueueStore>,
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
@@ -196,7 +201,7 @@ pub fn router_with_simulator(
 ) -> (Router, Arc<llm_access_kiro::cache_sim::KiroCacheSimulator>) {
     let request_activity = Arc::new(activity::RequestActivityTracker::new());
     let geoip = runtime.geoip();
-    let provider_state = provider::ProviderState::new_with_config_store_activity_and_latency(
+    let mut provider_state = provider::ProviderState::new_with_config_store_activity_and_latency(
         runtime.control_store(),
         runtime.provider_route_store(),
         runtime.admin_config_store(),
@@ -204,6 +209,11 @@ pub fn router_with_simulator(
         geoip.clone(),
         runtime.kiro_latency_ranker(),
     );
+    let moderation_gate = ModerationGate::new(runtime.admin_moderation_store());
+    provider_state.set_moderation_gate(Arc::clone(&moderation_gate));
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.spawn(Arc::clone(&moderation_gate).run_refresh_loop());
+    }
     let codex_image_gateway = Arc::new(
         CodexImageGateway::new(CodexImageGatewayConfig {
             mode: ImageGatewayMode::IntegratedCodexApi,
@@ -230,6 +240,8 @@ pub fn router_with_simulator(
         admin_codex_account_store: runtime.admin_codex_account_store(),
         admin_kiro_account_store: runtime.admin_kiro_account_store(),
         admin_anthropic_upstream_store: runtime.admin_anthropic_upstream_store(),
+        admin_moderation_store: runtime.admin_moderation_store(),
+        moderation_gate,
         admin_review_queue_store: runtime.admin_review_queue_store(),
         public_access_store: runtime.public_access_store(),
         public_community_store: runtime.public_community_store(),
@@ -433,6 +445,35 @@ pub fn router_with_simulator(
         .route(
             "/admin/kiro-gateway/anthropic-upstreams/:name/test",
             post(admin::test_admin_anthropic_upstream_model),
+        )
+        .route(
+            "/admin/llm-gateway/moderation/categories",
+            get(admin::list_admin_moderation_categories)
+                .post(admin::add_admin_moderation_categories),
+        )
+        .route(
+            "/admin/llm-gateway/moderation/categories/:code",
+            delete(admin::delete_admin_moderation_category),
+        )
+        .route(
+            "/admin/llm-gateway/moderation/keywords",
+            get(admin::list_admin_moderation_keywords).post(admin::add_admin_moderation_keywords),
+        )
+        .route(
+            "/admin/llm-gateway/moderation/keywords/:id",
+            delete(admin::delete_admin_moderation_keyword),
+        )
+        .route(
+            "/admin/llm-gateway/moderation/banned-sessions",
+            get(admin::list_admin_moderation_banned_sessions),
+        )
+        .route(
+            "/admin/llm-gateway/moderation/banned-sessions/:id",
+            get(admin::get_admin_moderation_banned_session),
+        )
+        .route(
+            "/admin/llm-gateway/moderation/banned-sessions/:id/review",
+            post(admin::review_admin_moderation_banned_session),
         )
         .route(
             "/admin/kiro-gateway/accounts",

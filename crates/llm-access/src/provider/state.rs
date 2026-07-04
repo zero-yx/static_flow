@@ -30,6 +30,7 @@ use super::{
 };
 use crate::{
     activity::RequestActivityTracker, geoip::GeoIpResolver, kiro_latency::KiroLatencyRanker,
+    moderation::ModerationGate,
 };
 
 fn protected_thinking_signature_secret_from_env() -> Option<Arc<str>> {
@@ -144,7 +145,13 @@ impl ProviderState {
             kiro_latency_ranker,
             request_activity,
             protected_thinking_signature_secret: protected_thinking_signature_secret_from_env(),
+            moderation_gate: ModerationGate::disabled(),
         }
+    }
+
+    /// Install the shared keyword moderation gate used by provider dispatch.
+    pub fn set_moderation_gate(&mut self, moderation_gate: Arc<ModerationGate>) {
+        self.moderation_gate = moderation_gate;
     }
 
     pub(crate) fn route_store(&self) -> Arc<dyn ProviderRouteStore> {
@@ -214,6 +221,7 @@ impl ProviderState {
             kiro_session_affinity: Arc::clone(&self.kiro_session_affinity),
             kiro_latency_ranker: Arc::clone(&self.kiro_latency_ranker),
             protected_thinking_signature_secret: self.protected_thinking_signature_secret.clone(),
+            moderation_gate: Arc::clone(&self.moderation_gate),
         }
     }
 }

@@ -10968,6 +10968,137 @@ pub struct TestAdminAnthropicUpstreamModelInput {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(default)]
+pub struct ModerationKeywordView {
+    pub id: i64,
+    pub keyword: String,
+    pub categories: Vec<String>,
+    pub note: Option<String>,
+    pub source: String,
+    pub created_at_ms: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct ModerationCategoryView {
+    pub code: String,
+    pub label: String,
+    pub description: String,
+    pub severity: String,
+    pub created_at_ms: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct AdminModerationCategoriesResponse {
+    pub categories: Vec<ModerationCategoryView>,
+    pub generated_at: i64,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Default)]
+pub struct AddAdminModerationCategoryInput {
+    pub code: String,
+    pub label: String,
+    pub description: Option<String>,
+    pub severity: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Default)]
+pub struct AddAdminModerationCategoriesInput {
+    pub categories: Vec<AddAdminModerationCategoryInput>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct ModerationGateStatsView {
+    pub loaded: bool,
+    pub loaded_at_ms: Option<i64>,
+    pub keyword_count: usize,
+    pub banned_session_count: usize,
+    pub suppressed_hit_count: usize,
+    pub blocked_requests_total: u64,
+    pub persist_failures_total: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct AdminModerationKeywordsResponse {
+    pub keywords: Vec<ModerationKeywordView>,
+    pub total: usize,
+    pub stats: ModerationGateStatsView,
+    pub generated_at: i64,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Default)]
+pub struct AddAdminModerationKeywordsInput {
+    pub content: String,
+    pub format: Option<String>,
+    pub note: Option<String>,
+    pub categories: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct AddAdminModerationKeywordsResponse {
+    pub inserted: usize,
+    pub duplicates: usize,
+    pub parsed: usize,
+    pub generated_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct ModerationBannedSessionView {
+    pub id: i64,
+    pub hit_key: String,
+    pub session_key: String,
+    pub provider: String,
+    pub key_id: String,
+    pub key_name: String,
+    pub session_id: String,
+    pub matched_keyword: String,
+    pub matched_categories: Vec<String>,
+    pub matched_context: String,
+    pub match_start: i64,
+    pub match_end: i64,
+    pub match_prefix_sha256: String,
+    pub keyword_set_hash: String,
+    pub endpoint: String,
+    pub model: String,
+    pub client_ip: String,
+    pub status: String,
+    pub review_note: Option<String>,
+    pub banned_at_ms: i64,
+    pub reviewed_at_ms: Option<i64>,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct ModerationBannedSessionDetailView {
+    pub session: ModerationBannedSessionView,
+    pub request_headers_json: String,
+    pub request_body_json: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct AdminModerationBannedSessionsResponse {
+    pub sessions: Vec<ModerationBannedSessionView>,
+    pub total: usize,
+    pub limit: usize,
+    pub offset: usize,
+    pub has_more: bool,
+    pub generated_at: i64,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Default)]
+pub struct ReviewModerationBannedSessionInput {
+    pub banned: bool,
+    pub review_note: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
 pub struct KiroAccountView {
     pub name: String,
     pub auth_method: String,
@@ -12047,6 +12178,255 @@ pub async fn delete_admin_anthropic_upstream_channel(name: &str) -> Result<(), S
             return Err(format!("Failed: {text}"));
         }
         Ok(())
+    }
+}
+
+pub async fn fetch_admin_moderation_categories() -> Result<AdminModerationCategoriesResponse, String>
+{
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminModerationCategoriesResponse::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/llm-gateway/moderation/categories", llm_access_admin_base());
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn add_admin_moderation_categories(
+    input: &AddAdminModerationCategoriesInput,
+) -> Result<(), String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = input;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/llm-gateway/moderation/categories", llm_access_admin_base());
+        let response = api_post(&url)
+            .json(input)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        Ok(())
+    }
+}
+
+pub async fn delete_admin_moderation_category(code: &str) -> Result<(), String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = code;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/llm-gateway/moderation/categories/{}",
+            llm_access_admin_base(),
+            urlencoding::encode(code)
+        );
+        let response = api_delete(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        Ok(())
+    }
+}
+
+pub async fn fetch_admin_moderation_keywords() -> Result<AdminModerationKeywordsResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        Ok(AdminModerationKeywordsResponse::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/llm-gateway/moderation/keywords", llm_access_admin_base());
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn add_admin_moderation_keywords(
+    input: &AddAdminModerationKeywordsInput,
+) -> Result<AddAdminModerationKeywordsResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = input;
+        Ok(AddAdminModerationKeywordsResponse::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/llm-gateway/moderation/keywords", llm_access_admin_base());
+        let response = api_post(&url)
+            .json(input)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn delete_admin_moderation_keyword(id: i64) -> Result<(), String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = id;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!("{}/admin/llm-gateway/moderation/keywords/{id}", llm_access_admin_base());
+        let response = api_delete(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        Ok(())
+    }
+}
+
+pub async fn fetch_admin_moderation_banned_sessions(
+    status: &str,
+    limit: usize,
+    offset: usize,
+) -> Result<AdminModerationBannedSessionsResponse, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = (status, limit, offset);
+        Ok(AdminModerationBannedSessionsResponse::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/llm-gateway/moderation/banned-sessions?status={}&limit={limit}&\
+             offset={offset}",
+            llm_access_admin_base(),
+            urlencoding::encode(status)
+        );
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn fetch_admin_moderation_banned_session(
+    id: i64,
+) -> Result<ModerationBannedSessionDetailView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = id;
+        Ok(ModerationBannedSessionDetailView::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/llm-gateway/moderation/banned-sessions/{id}",
+            llm_access_admin_base()
+        );
+        let response = api_get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
+    }
+}
+
+pub async fn review_admin_moderation_banned_session(
+    id: i64,
+    input: &ReviewModerationBannedSessionInput,
+) -> Result<ModerationBannedSessionView, String> {
+    #[cfg(feature = "mock")]
+    {
+        let _ = (id, input);
+        Ok(ModerationBannedSessionView::default())
+    }
+
+    #[cfg(not(feature = "mock"))]
+    {
+        let url = format!(
+            "{}/admin/llm-gateway/moderation/banned-sessions/{id}/review",
+            llm_access_admin_base()
+        );
+        let response = api_post(&url)
+            .json(input)
+            .map_err(|e| format!("Serialize error: {:?}", e))?
+            .send()
+            .await
+            .map_err(|e| format!("Network error: {:?}", e))?;
+        if !response.ok() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Failed: {text}"));
+        }
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Parse error: {:?}", e))
     }
 }
 

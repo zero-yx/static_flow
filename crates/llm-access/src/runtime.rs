@@ -12,13 +12,15 @@ use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use llm_access_core::store::{
     AdminAccountGroupStore, AdminAnthropicUpstreamStore, AdminCodexAccountStore, AdminConfigStore,
-    AdminKeyStore, AdminKiroAccountStore, AdminProxyStore, AdminReviewQueueStore, ControlStore,
-    EmptyAdminAccountGroupStore, EmptyAdminAnthropicUpstreamStore, EmptyAdminCodexAccountStore,
-    EmptyAdminConfigStore, EmptyAdminKeyStore, EmptyAdminKiroAccountStore, EmptyAdminProxyStore,
-    EmptyAdminReviewQueueStore, EmptyProviderRouteStore, EmptyPublicAccessStore,
-    EmptyPublicCommunityStore, EmptyPublicStatusStore, EmptyPublicSubmissionStore,
-    EmptyPublicUsageStore, ProviderRouteStore, PublicAccessStore, PublicCommunityStore,
-    PublicStatusStore, PublicSubmissionStore, PublicUsageStore, DEFAULT_CODEX_CLIENT_VERSION,
+    AdminKeyStore, AdminKiroAccountStore, AdminModerationStore, AdminProxyStore,
+    AdminReviewQueueStore, ControlStore, EmptyAdminAccountGroupStore,
+    EmptyAdminAnthropicUpstreamStore, EmptyAdminCodexAccountStore, EmptyAdminConfigStore,
+    EmptyAdminKeyStore, EmptyAdminKiroAccountStore, EmptyAdminModerationStore,
+    EmptyAdminProxyStore, EmptyAdminReviewQueueStore, EmptyProviderRouteStore,
+    EmptyPublicAccessStore, EmptyPublicCommunityStore, EmptyPublicStatusStore,
+    EmptyPublicSubmissionStore, EmptyPublicUsageStore, ProviderRouteStore, PublicAccessStore,
+    PublicCommunityStore, PublicStatusStore, PublicSubmissionStore, PublicUsageStore,
+    DEFAULT_CODEX_CLIENT_VERSION,
 };
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 use llm_access_core::store::{
@@ -73,6 +75,7 @@ pub struct LlmAccessRuntime {
     admin_codex_account_store: Arc<dyn AdminCodexAccountStore>,
     admin_kiro_account_store: Arc<dyn AdminKiroAccountStore>,
     admin_anthropic_upstream_store: Arc<dyn AdminAnthropicUpstreamStore>,
+    admin_moderation_store: Arc<dyn AdminModerationStore>,
     admin_review_queue_store: Arc<dyn AdminReviewQueueStore>,
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
@@ -104,6 +107,7 @@ struct LlmAccessStores {
     admin_codex_account_store: Arc<dyn AdminCodexAccountStore>,
     admin_kiro_account_store: Arc<dyn AdminKiroAccountStore>,
     admin_anthropic_upstream_store: Arc<dyn AdminAnthropicUpstreamStore>,
+    admin_moderation_store: Arc<dyn AdminModerationStore>,
     admin_review_queue_store: Arc<dyn AdminReviewQueueStore>,
     public_access_store: Arc<dyn PublicAccessStore>,
     public_community_store: Arc<dyn PublicCommunityStore>,
@@ -132,6 +136,7 @@ trait RuntimeRepository:
     + AdminCodexAccountStore
     + AdminKiroAccountStore
     + AdminAnthropicUpstreamStore
+    + AdminModerationStore
     + AdminReviewQueueStore
     + PublicAccessStore
     + PublicCommunityStore
@@ -155,6 +160,7 @@ impl<T> RuntimeRepository for T where
         + AdminCodexAccountStore
         + AdminKiroAccountStore
         + AdminAnthropicUpstreamStore
+        + AdminModerationStore
         + AdminReviewQueueStore
         + PublicAccessStore
         + PublicCommunityStore
@@ -178,6 +184,7 @@ trait RuntimeRepository:
     + AdminCodexAccountStore
     + AdminKiroAccountStore
     + AdminAnthropicUpstreamStore
+    + AdminModerationStore
     + AdminReviewQueueStore
     + PublicAccessStore
     + PublicCommunityStore
@@ -200,6 +207,7 @@ impl<T> RuntimeRepository for T where
         + AdminCodexAccountStore
         + AdminKiroAccountStore
         + AdminAnthropicUpstreamStore
+        + AdminModerationStore
         + AdminReviewQueueStore
         + PublicAccessStore
         + PublicCommunityStore
@@ -259,6 +267,7 @@ impl LlmAccessRuntime {
             admin_codex_account_store: Arc::new(EmptyAdminCodexAccountStore),
             admin_kiro_account_store: Arc::new(EmptyAdminKiroAccountStore),
             admin_anthropic_upstream_store: Arc::new(EmptyAdminAnthropicUpstreamStore),
+            admin_moderation_store: Arc::new(EmptyAdminModerationStore),
             admin_review_queue_store: Arc::new(EmptyAdminReviewQueueStore),
             public_access_store: Arc::new(EmptyPublicAccessStore),
             public_community_store: Arc::new(EmptyPublicCommunityStore),
@@ -293,6 +302,7 @@ impl LlmAccessRuntime {
             admin_codex_account_store: stores.admin_codex_account_store,
             admin_kiro_account_store: stores.admin_kiro_account_store,
             admin_anthropic_upstream_store: stores.admin_anthropic_upstream_store,
+            admin_moderation_store: stores.admin_moderation_store,
             admin_review_queue_store: stores.admin_review_queue_store,
             public_access_store: stores.public_access_store,
             public_community_store: stores.public_community_store,
@@ -428,6 +438,7 @@ impl LlmAccessRuntime {
         let admin_kiro_account_store: Arc<dyn AdminKiroAccountStore> = repository.clone();
         let admin_anthropic_upstream_store: Arc<dyn AdminAnthropicUpstreamStore> =
             repository.clone();
+        let admin_moderation_store: Arc<dyn AdminModerationStore> = repository.clone();
         let admin_review_queue_store: Arc<dyn AdminReviewQueueStore> = repository.clone();
         #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
         let public_access_store: Arc<dyn PublicAccessStore> =
@@ -460,6 +471,7 @@ impl LlmAccessRuntime {
             admin_codex_account_store,
             admin_kiro_account_store,
             admin_anthropic_upstream_store,
+            admin_moderation_store,
             admin_review_queue_store,
             public_access_store,
             public_community_store,
@@ -546,6 +558,12 @@ impl LlmAccessRuntime {
     /// Admin direct Anthropic upstream store used by Kiro gateway endpoints.
     pub fn admin_anthropic_upstream_store(&self) -> Arc<dyn AdminAnthropicUpstreamStore> {
         Arc::clone(&self.admin_anthropic_upstream_store)
+    }
+
+    /// Keyword moderation store used by the moderation gate and admin
+    /// endpoints.
+    pub fn admin_moderation_store(&self) -> Arc<dyn AdminModerationStore> {
+        Arc::clone(&self.admin_moderation_store)
     }
 
     /// Admin review queue store used by local admin endpoints.

@@ -292,6 +292,7 @@ fn route_path_for(route: &Route) -> String {
         Route::Admin => config::route_path("/admin"),
         Route::AdminLlmGateway => config::route_path("/admin/llm-gateway"),
         Route::AdminLlmGatewayMonitor => config::route_path("/admin/llm-gateway/monitor"),
+        Route::AdminLlmGatewayModeration => config::route_path("/admin/llm-gateway/moderation"),
         Route::AdminKiroGateway => config::route_path("/admin/kiro-gateway"),
         Route::AdminKiroAccountStatus => config::route_path("/admin/kiro-gateway/accounts"),
         Route::AdminKiroAnthropicUpstreams => {
@@ -511,6 +512,7 @@ pub fn apply_route_seo(route: Option<&Route>) {
         Route::Admin
         | Route::AdminLlmGateway
         | Route::AdminLlmGatewayMonitor
+        | Route::AdminLlmGatewayModeration
         | Route::AdminKiroGateway
         | Route::AdminKiroAccountStatus
         | Route::AdminKiroAnthropicUpstreams

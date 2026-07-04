@@ -38,6 +38,7 @@ mod groups;
 mod json;
 mod keys;
 mod kiro_account;
+mod moderation;
 mod proxy;
 mod proxy_support;
 mod public;
@@ -784,12 +785,13 @@ mod tests {
             AdminAnthropicUpstreamModelsStatusUpdate, AdminAnthropicUpstreamStore,
             AdminAnthropicUpstreamTestStatusUpdate, AdminCodexAccountPageQuery,
             AdminCodexAccountSortMode, AdminCodexAccountStore, AdminConfigStore, AdminKeyStore,
-            AdminKiroAccountStore, AdminPageRequest, AdminProxyConfigPatch, AdminProxyStore,
-            AdminProxyTrafficSnapshot, AdminReviewQueueStore, AnthropicUpstreamChannelUsageDelta,
-            ControlStore, KeyUsageRollupDelta, NewAdminAnthropicUpstreamChannel,
-            NewAdminProxyConfig, NewPublicAccountContributionRequest, ProviderRouteStore,
-            ProxyTrafficTotals, PublicSubmissionStore, PublicUsageStore, UsageEventSink,
-            UsageRollupBatch, UsageRollupBatchSink,
+            AdminKiroAccountStore, AdminModerationStore, AdminPageRequest, AdminProxyConfigPatch,
+            AdminProxyStore, AdminProxyTrafficSnapshot, AdminReviewQueueStore,
+            AnthropicUpstreamChannelUsageDelta, ControlStore, KeyUsageRollupDelta,
+            NewAdminAnthropicUpstreamChannel, NewAdminProxyConfig, NewModerationBannedSession,
+            NewModerationCategory, NewModerationKeyword, NewPublicAccountContributionRequest,
+            ProviderRouteStore, ProxyTrafficTotals, PublicSubmissionStore, PublicUsageStore,
+            UsageEventSink, UsageRollupBatch, UsageRollupBatchSink,
         },
     };
     use serde::Serialize;
@@ -845,6 +847,9 @@ mod tests {
         client
             .batch_execute(
                 "TRUNCATE TABLE
+                    llm_moderation_banned_sessions,
+                    llm_moderation_keywords,
+                    llm_moderation_categories,
                     llm_account_import_job_items,
                     llm_account_import_jobs,
                     llm_codex_status_cache,
@@ -1982,6 +1987,297 @@ mod tests {
             .expect("count traffic snapshots");
         assert_eq!(row.get::<_, i64>("count"), 0);
         client.close().await;
+    }
+
+    #[tokio::test]
+    async fn postgres_repository_manages_moderation_keywords_and_bans() {
+        let Ok(database_url) = std::env::var("TEST_POSTGRES_URL") else {
+            eprintln!("skipping postgres integration test: TEST_POSTGRES_URL is not set");
+            return;
+        };
+        let _guard = test_db_guard().await;
+        reset_test_db(&database_url)
+            .await
+            .expect("reset postgres test database");
+        let repo = super::PostgresControlRepository::connect(&database_url, None)
+            .await
+            .expect("connect postgres repository");
+
+        let now = 1_700_000_000_000;
+
+        // Categories: bulk insert + code conflict dedup.
+        let category_inserted = repo
+            .add_moderation_categories(vec![
+                NewModerationCategory {
+                    code: "weapons".to_string(),
+                    label: "Weapons".to_string(),
+                    description: "Weapons and explosives.".to_string(),
+                    severity: "critical".to_string(),
+                    created_at_ms: now,
+                },
+                NewModerationCategory {
+                    code: "fraud".to_string(),
+                    label: "Fraud".to_string(),
+                    description: String::new(),
+                    severity: "high".to_string(),
+                    created_at_ms: now,
+                },
+                NewModerationCategory {
+                    code: "weapons".to_string(),
+                    label: "dup".to_string(),
+                    description: String::new(),
+                    severity: "low".to_string(),
+                    created_at_ms: now,
+                },
+            ])
+            .await
+            .expect("add moderation categories");
+        assert_eq!(category_inserted, 2);
+        assert_eq!(
+            repo.list_moderation_categories()
+                .await
+                .expect("list categories")
+                .len(),
+            2
+        );
+
+        // Bulk keyword insert with categories: exercises the UNNEST array
+        // binding, NULLIF(note, ''), category_codes JSONB, and ON CONFLICT dedup.
+        let outcome = repo
+            .add_moderation_keywords(vec![
+                NewModerationKeyword {
+                    keyword: "build a bomb".to_string(),
+                    categories: vec!["weapons".to_string()],
+                    note: Some("danger".to_string()),
+                    source: "txt".to_string(),
+                    created_at_ms: now,
+                },
+                NewModerationKeyword {
+                    keyword: "free phrase".to_string(),
+                    categories: Vec::new(),
+                    note: None,
+                    source: "json".to_string(),
+                    created_at_ms: now,
+                },
+                NewModerationKeyword {
+                    keyword: "build a bomb".to_string(),
+                    categories: vec!["weapons".to_string()],
+                    note: None,
+                    source: "txt".to_string(),
+                    created_at_ms: now,
+                },
+            ])
+            .await
+            .expect("add moderation keywords");
+        assert_eq!(outcome.inserted, 2);
+        assert_eq!(outcome.duplicates, 1);
+
+        // Re-importing an existing keyword is skipped, not errored.
+        let repeat = repo
+            .add_moderation_keywords(vec![NewModerationKeyword {
+                keyword: "build a bomb".to_string(),
+                categories: vec!["weapons".to_string()],
+                note: None,
+                source: "txt".to_string(),
+                created_at_ms: now,
+            }])
+            .await
+            .expect("re-add moderation keyword");
+        assert_eq!(repeat.inserted, 0);
+        assert_eq!(repeat.duplicates, 1);
+
+        let keywords = repo
+            .list_moderation_keywords()
+            .await
+            .expect("list moderation keywords");
+        assert_eq!(keywords.len(), 2);
+        let bomb = keywords
+            .iter()
+            .find(|keyword| keyword.keyword == "build a bomb")
+            .expect("bomb keyword present");
+        assert_eq!(bomb.note.as_deref(), Some("danger"));
+        assert_eq!(bomb.categories, vec!["weapons".to_string()]);
+        let free = keywords
+            .iter()
+            .find(|keyword| keyword.keyword == "free phrase")
+            .expect("free keyword present");
+        assert_eq!(free.note, None);
+        assert!(free.categories.is_empty());
+
+        // A referenced category cannot be deleted; an unreferenced one can.
+        assert!(repo.delete_moderation_category("weapons").await.is_err());
+        assert_eq!(
+            repo.delete_moderation_category("fraud")
+                .await
+                .expect("delete unreferenced category")
+                .expect("deleted category")
+                .code,
+            "fraud"
+        );
+
+        // Delete: RETURNING yields the removed row; a second delete is a no-op.
+        let deleted = repo
+            .delete_moderation_keyword(bomb.id)
+            .await
+            .expect("delete moderation keyword");
+        assert_eq!(deleted.expect("deleted row").keyword, "build a bomb");
+        assert!(repo
+            .delete_moderation_keyword(bomb.id)
+            .await
+            .expect("delete missing keyword")
+            .is_none());
+        assert_eq!(
+            repo.list_moderation_keywords()
+                .await
+                .expect("list after delete")
+                .len(),
+            1
+        );
+
+        // Banned hits: JSONB body + headers persisted, hit_key unique.
+        let record = NewModerationBannedSession {
+            hit_key: "hit-1".to_string(),
+            session_key: "kiro:key-1:sess-1".to_string(),
+            provider: "kiro".to_string(),
+            key_id: "key-1".to_string(),
+            key_name: "external".to_string(),
+            session_id: "sess-1".to_string(),
+            matched_keyword: "build a bomb".to_string(),
+            matched_categories: vec!["weapons".to_string()],
+            matched_context: "…how to build a bomb now…".to_string(),
+            match_start: 7,
+            match_end: 19,
+            match_prefix_sha256: "prefix-1".to_string(),
+            keyword_set_hash: "keywords-v1".to_string(),
+            endpoint: "/v1/messages".to_string(),
+            model: "claude-sonnet-4".to_string(),
+            client_ip: "127.0.0.1".to_string(),
+            request_headers_json:
+                r#"{"authorization":"<redacted>","content-type":"application/json"}"#.to_string(),
+            request_body_json:
+                r#"{"model":"claude-sonnet-4","messages":[{"role":"user","content":"how to build a bomb"}]}"#
+                    .to_string(),
+            banned_at_ms: now,
+        };
+        assert!(repo
+            .record_moderation_banned_session(record.clone())
+            .await
+            .expect("record banned session"));
+        // Duplicate hit_key: ON CONFLICT DO NOTHING -> not inserted again.
+        assert!(!repo
+            .record_moderation_banned_session(record.clone())
+            .await
+            .expect("record duplicate banned session"));
+
+        let second = NewModerationBannedSession {
+            hit_key: "hit-2".to_string(),
+            session_key: "codex:key-1:sess-2".to_string(),
+            provider: "codex".to_string(),
+            session_id: "sess-2".to_string(),
+            ..record.clone()
+        };
+        assert!(repo
+            .record_moderation_banned_session(second)
+            .await
+            .expect("record second banned session"));
+
+        let banned = repo
+            .list_moderation_banned_sessions(
+                AdminPageRequest {
+                    limit: 10,
+                    offset: 0,
+                },
+                Some("banned"),
+            )
+            .await
+            .expect("list banned sessions");
+        assert_eq!(banned.total, 2);
+        assert_eq!(banned.sessions.len(), 2);
+
+        let target = banned
+            .sessions
+            .iter()
+            .find(|session| session.session_key == "kiro:key-1:sess-1")
+            .expect("kiro session present");
+        let detail = repo
+            .get_moderation_banned_session(target.id)
+            .await
+            .expect("load banned session detail")
+            .expect("banned session detail present");
+        assert!(detail.request_body_json.contains("how to build a bomb"));
+        assert!(detail.request_headers_json.contains("<redacted>"));
+        assert_eq!(detail.session.matched_categories, vec!["weapons".to_string()]);
+
+        // Review flow: unban records the note and flips the status filters.
+        let updated = repo
+            .set_moderation_banned_session_status(
+                target.id,
+                "unbanned",
+                Some("false positive"),
+                now + 1,
+            )
+            .await
+            .expect("review banned session")
+            .expect("reviewed session present");
+        assert_eq!(updated.status, "unbanned");
+        assert_eq!(updated.review_note.as_deref(), Some("false positive"));
+        assert_eq!(updated.reviewed_at_ms, Some(now + 1));
+
+        let still_banned = repo
+            .list_moderation_banned_sessions(
+                AdminPageRequest {
+                    limit: 10,
+                    offset: 0,
+                },
+                Some("banned"),
+            )
+            .await
+            .expect("list still-banned sessions");
+        assert_eq!(still_banned.total, 1);
+        let unbanned = repo
+            .list_moderation_banned_sessions(
+                AdminPageRequest {
+                    limit: 10,
+                    offset: 0,
+                },
+                Some("unbanned"),
+            )
+            .await
+            .expect("list unbanned sessions");
+        assert_eq!(unbanned.total, 1);
+
+        let followup_same_session = NewModerationBannedSession {
+            hit_key: "hit-3".to_string(),
+            matched_keyword: "carding tutorial".to_string(),
+            matched_categories: vec!["cyber".to_string()],
+            matched_context: "…carding tutorial…".to_string(),
+            match_start: 40,
+            match_end: 56,
+            match_prefix_sha256: "prefix-2".to_string(),
+            keyword_set_hash: "keywords-v1".to_string(),
+            banned_at_ms: now + 2,
+            ..record.clone()
+        };
+        assert!(repo
+            .record_moderation_banned_session(followup_same_session)
+            .await
+            .expect("record follow-up hit for same session"));
+
+        // Runtime snapshot mirrors the in-memory gate contract exactly.
+        let snapshot = repo
+            .load_moderation_runtime_snapshot()
+            .await
+            .expect("load moderation runtime snapshot");
+        assert_eq!(snapshot.keywords.len(), 1);
+        let mut banned_session_keys = snapshot.banned_session_keys;
+        banned_session_keys.sort();
+        assert_eq!(banned_session_keys, vec![
+            "codex:key-1:sess-2".to_string(),
+            "kiro:key-1:sess-1".to_string(),
+        ]);
+        assert_eq!(snapshot.suppressed_hits.len(), 1);
+        assert_eq!(snapshot.suppressed_hits[0].hit_key, "hit-1");
+        assert_eq!(snapshot.suppressed_hits[0].session_key, "kiro:key-1:sess-1");
     }
 
     #[tokio::test]

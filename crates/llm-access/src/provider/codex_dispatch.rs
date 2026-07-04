@@ -79,7 +79,13 @@ use super::{
     StreamRecordState, CODEX_TRANSIENT_ACCOUNT_FAILURE_COOLDOWN_MAX,
     CODEX_TRANSIENT_ACCOUNT_FAILURE_COOLDOWN_MIN, MAX_PROVIDER_PROXY_BODY_BYTES,
 };
-use crate::codex_refresh;
+use crate::{
+    codex_refresh,
+    moderation::{
+        enforce_moderation, moderation_text_for_json_body, ModerationDecision, ModerationRequest,
+        MODERATION_BLOCKED_MESSAGE, MODERATION_PROVIDER_CODEX,
+    },
+};
 
 pub async fn dispatch_codex_proxy(
     key: AuthenticatedKey,
@@ -96,6 +102,7 @@ pub async fn dispatch_codex_proxy(
         codex_session_affinity,
         codex_session_recovery,
         codex_session_rejection,
+        moderation_gate,
         ..
     } = deps;
     let mut usage_meta = ProviderUsageMetadata::from_request_parts(
@@ -242,6 +249,39 @@ pub async fn dispatch_codex_proxy(
         prepared.resolved_session_id.as_deref(),
         prepared.resolved_session_source,
     );
+    let codex_model = prepared
+        .client_visible_model
+        .clone()
+        .or_else(|| prepared.model.clone())
+        .unwrap_or_default();
+    let codex_session_id = prepared
+        .resolved_session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    // Keyword moderation gate: reject (and, on a fresh keyword hit, capture and
+    // ban the session) before any upstream work. See `crate::moderation`.
+    if let ModerationDecision::Block = enforce_moderation(
+        &moderation_gate,
+        ModerationRequest {
+            provider: MODERATION_PROVIDER_CODEX,
+            key: &key,
+            session_id: codex_session_id,
+            endpoint: &gateway_path,
+            model: &codex_model,
+            headers: &request_headers,
+            body: &body,
+            client_ip: &usage_meta.client_ip,
+        },
+        || moderation_text_for_json_body(&body).unwrap_or_default(),
+    ) {
+        usage_meta.mark_session_blocked();
+        return codex_surface_error_response(
+            &gateway_path,
+            StatusCode::FORBIDDEN,
+            MODERATION_BLOCKED_MESSAGE,
+        );
+    }
     if strict_session_rejection_enabled {
         if let Some((affinity_id, rejection)) = codex_affinity_id.as_ref().and_then(|id| {
             codex_session_rejection

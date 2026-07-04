@@ -5787,6 +5787,7 @@ dependencies = [
 name = "llm-access-core"
 version = "0.1.0"
 dependencies = [
+ "aho-corasick",
  "anyhow",
  "async-trait",
  "base64 0.22.1",

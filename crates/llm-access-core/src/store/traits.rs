@@ -33,6 +33,12 @@ use super::{
         AdminKiroBalanceView, AdminKiroStatusCacheUpdate, KiroStatusRefreshTarget,
         NewAdminKiroAccount,
     },
+    moderation::{
+        ModerationBannedSession, ModerationBannedSessionDetail, ModerationBannedSessionsPage,
+        ModerationCategory, ModerationKeyword, ModerationKeywordImportOutcome,
+        ModerationRuntimeSnapshot, NewModerationBannedSession, NewModerationCategory,
+        NewModerationKeyword,
+    },
     proxy::{
         AdminProxyBinding, AdminProxyConfig, AdminProxyConfigPatch, AdminProxyEndpointCheckUpdate,
         AdminProxyTrafficSnapshot, NewAdminProxyConfig,
@@ -277,6 +283,76 @@ pub trait AdminAnthropicUpstreamStore: Send + Sync {
     ) -> anyhow::Result<Option<AdminAnthropicUpstreamChannel>> {
         Ok(None)
     }
+}
+
+/// Keyword moderation queries used by the request hot path (startup snapshot,
+/// new ban records) and the admin review surface.
+#[async_trait]
+pub trait AdminModerationStore: Send + Sync {
+    /// Load the compact runtime snapshot consumed by the in-memory gate:
+    /// all keywords (with their categories), active banned session keys, and
+    /// reviewed false-positive hits.
+    async fn load_moderation_runtime_snapshot(&self) -> anyhow::Result<ModerationRuntimeSnapshot>;
+
+    /// List all configured risk categories.
+    async fn list_moderation_categories(&self) -> anyhow::Result<Vec<ModerationCategory>>;
+
+    /// Insert categories in bulk, skipping ones whose code already exists.
+    async fn add_moderation_categories(
+        &self,
+        categories: Vec<NewModerationCategory>,
+    ) -> anyhow::Result<usize>;
+
+    /// Delete one category by code. Returns the deleted category when found.
+    /// Implementations should refuse deletion while keywords still reference
+    /// it.
+    async fn delete_moderation_category(
+        &self,
+        code: &str,
+    ) -> anyhow::Result<Option<ModerationCategory>>;
+
+    /// List all configured moderation keywords with their categories.
+    async fn list_moderation_keywords(&self) -> anyhow::Result<Vec<ModerationKeyword>>;
+
+    /// Insert keywords in bulk, skipping ones that already exist.
+    async fn add_moderation_keywords(
+        &self,
+        keywords: Vec<NewModerationKeyword>,
+    ) -> anyhow::Result<ModerationKeywordImportOutcome>;
+
+    /// Delete one keyword by id. Returns the deleted keyword when found.
+    async fn delete_moderation_keyword(&self, id: i64)
+        -> anyhow::Result<Option<ModerationKeyword>>;
+
+    /// Persist one new banned session with its captured request payload.
+    /// Returns `false` when the session key was already recorded.
+    async fn record_moderation_banned_session(
+        &self,
+        record: NewModerationBannedSession,
+    ) -> anyhow::Result<bool>;
+
+    /// List one page of banned sessions, optionally filtered by status.
+    async fn list_moderation_banned_sessions(
+        &self,
+        page: AdminPageRequest,
+        status: Option<&str>,
+    ) -> anyhow::Result<ModerationBannedSessionsPage>;
+
+    /// Load one banned session including the captured request payload.
+    async fn get_moderation_banned_session(
+        &self,
+        id: i64,
+    ) -> anyhow::Result<Option<ModerationBannedSessionDetail>>;
+
+    /// Set the review status (`banned`/`unbanned`) for one session record.
+    /// Returns the updated card when found.
+    async fn set_moderation_banned_session_status(
+        &self,
+        id: i64,
+        status: &str,
+        review_note: Option<&str>,
+        reviewed_at_ms: i64,
+    ) -> anyhow::Result<Option<ModerationBannedSession>>;
 }
 
 /// Public read-only queries used by unauthenticated public endpoints.

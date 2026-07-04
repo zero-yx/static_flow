@@ -31,6 +31,12 @@ use super::{
         AdminKiroBalanceView, AdminKiroCacheView, AdminKiroStatusCacheUpdate,
         KiroStatusRefreshTarget, NewAdminKiroAccount,
     },
+    moderation::{
+        ModerationBannedSession, ModerationBannedSessionDetail, ModerationBannedSessionsPage,
+        ModerationCategory, ModerationKeyword, ModerationKeywordImportOutcome,
+        ModerationRuntimeSnapshot, NewModerationBannedSession, NewModerationCategory,
+        NewModerationKeyword,
+    },
     proxy::{
         default_proxy_binding, default_proxy_bindings, AdminProxyBinding, AdminProxyConfig,
         AdminProxyConfigPatch, AdminProxyTrafficSnapshot, NewAdminProxyConfig,
@@ -48,10 +54,10 @@ use super::{
     },
     traits::{
         AdminAccountGroupStore, AdminAnthropicUpstreamStore, AdminCodexAccountStore,
-        AdminConfigStore, AdminKeyStore, AdminKiroAccountStore, AdminProxyStore,
-        AdminReviewQueueStore, ProviderRouteStore, PublicAccessStore, PublicCommunityStore,
-        PublicStatusStore, PublicSubmissionStore, PublicUsageStore, UsageAnalyticsStore,
-        UsageEventSink, UsageRollupBatchSink,
+        AdminConfigStore, AdminKeyStore, AdminKiroAccountStore, AdminModerationStore,
+        AdminProxyStore, AdminReviewQueueStore, ProviderRouteStore, PublicAccessStore,
+        PublicCommunityStore, PublicStatusStore, PublicSubmissionStore, PublicUsageStore,
+        UsageAnalyticsStore, UsageEventSink, UsageRollupBatchSink,
     },
     usage::{
         AdminLegacyKiroProxyMigration, ProxyTrafficQuery, ProxyTrafficSnapshot, ProxyTrafficTotals,
@@ -71,6 +77,91 @@ pub struct EmptyProviderRouteStore;
 
 /// Empty direct Anthropic upstream store used by isolated unit tests.
 pub struct EmptyAdminAnthropicUpstreamStore;
+
+/// Empty keyword moderation store used as the disabled-gate default and in
+/// isolated unit tests.
+pub struct EmptyAdminModerationStore;
+
+#[async_trait]
+impl AdminModerationStore for EmptyAdminModerationStore {
+    async fn load_moderation_runtime_snapshot(&self) -> anyhow::Result<ModerationRuntimeSnapshot> {
+        Ok(ModerationRuntimeSnapshot::default())
+    }
+
+    async fn list_moderation_categories(&self) -> anyhow::Result<Vec<ModerationCategory>> {
+        Ok(Vec::new())
+    }
+
+    async fn add_moderation_categories(
+        &self,
+        _categories: Vec<NewModerationCategory>,
+    ) -> anyhow::Result<usize> {
+        anyhow::bail!("moderation store is not configured")
+    }
+
+    async fn delete_moderation_category(
+        &self,
+        _code: &str,
+    ) -> anyhow::Result<Option<ModerationCategory>> {
+        Ok(None)
+    }
+
+    async fn list_moderation_keywords(&self) -> anyhow::Result<Vec<ModerationKeyword>> {
+        Ok(Vec::new())
+    }
+
+    async fn add_moderation_keywords(
+        &self,
+        _keywords: Vec<NewModerationKeyword>,
+    ) -> anyhow::Result<ModerationKeywordImportOutcome> {
+        anyhow::bail!("moderation store is not configured")
+    }
+
+    async fn delete_moderation_keyword(
+        &self,
+        _id: i64,
+    ) -> anyhow::Result<Option<ModerationKeyword>> {
+        Ok(None)
+    }
+
+    async fn record_moderation_banned_session(
+        &self,
+        _record: NewModerationBannedSession,
+    ) -> anyhow::Result<bool> {
+        anyhow::bail!("moderation store is not configured")
+    }
+
+    async fn list_moderation_banned_sessions(
+        &self,
+        page: AdminPageRequest,
+        _status: Option<&str>,
+    ) -> anyhow::Result<ModerationBannedSessionsPage> {
+        Ok(ModerationBannedSessionsPage {
+            sessions: Vec::new(),
+            total: 0,
+            limit: page.limit,
+            offset: page.offset,
+            has_more: false,
+        })
+    }
+
+    async fn get_moderation_banned_session(
+        &self,
+        _id: i64,
+    ) -> anyhow::Result<Option<ModerationBannedSessionDetail>> {
+        Ok(None)
+    }
+
+    async fn set_moderation_banned_session_status(
+        &self,
+        _id: i64,
+        _status: &str,
+        _review_note: Option<&str>,
+        _reviewed_at_ms: i64,
+    ) -> anyhow::Result<Option<ModerationBannedSession>> {
+        Ok(None)
+    }
+}
 
 #[async_trait]
 impl ProviderRouteStore for EmptyProviderRouteStore {

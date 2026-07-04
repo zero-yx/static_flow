@@ -15,6 +15,7 @@ mod groups;
 mod keys;
 mod kiro_account;
 mod kiro_model_routing;
+mod moderation;
 mod proxy;
 mod public;
 mod routes;
@@ -52,10 +53,11 @@ pub use config::{
 };
 pub use empty::{
     EmptyAdminAccountGroupStore, EmptyAdminAnthropicUpstreamStore, EmptyAdminCodexAccountStore,
-    EmptyAdminConfigStore, EmptyAdminKeyStore, EmptyAdminKiroAccountStore, EmptyAdminProxyStore,
-    EmptyAdminReviewQueueStore, EmptyProviderRouteStore, EmptyPublicAccessStore,
-    EmptyPublicCommunityStore, EmptyPublicStatusStore, EmptyPublicSubmissionStore,
-    EmptyPublicUsageStore, EmptyUsageAnalyticsStore, NoopUsageEventSink, NoopUsageRollupBatchSink,
+    EmptyAdminConfigStore, EmptyAdminKeyStore, EmptyAdminKiroAccountStore,
+    EmptyAdminModerationStore, EmptyAdminProxyStore, EmptyAdminReviewQueueStore,
+    EmptyProviderRouteStore, EmptyPublicAccessStore, EmptyPublicCommunityStore,
+    EmptyPublicStatusStore, EmptyPublicSubmissionStore, EmptyPublicUsageStore,
+    EmptyUsageAnalyticsStore, NoopUsageEventSink, NoopUsageRollupBatchSink,
 };
 pub use groups::{
     AdminAccountGroup, AdminAccountGroupOption, AdminAccountGroupPatch, AdminAccountGroupsPage,
@@ -74,6 +76,15 @@ pub use kiro_account::{
 };
 pub use kiro_model_routing::{
     kiro_model_group_preference, normalize_kiro_model_group_preferences, KiroModelGroupPreferences,
+};
+pub use moderation::{
+    ModerationBannedSession, ModerationBannedSessionDetail, ModerationBannedSessionsPage,
+    ModerationCategory, ModerationKeyword, ModerationKeywordImportOutcome,
+    ModerationRuntimeSnapshot, ModerationSuppressedHit, NewModerationBannedSession,
+    NewModerationCategory, NewModerationKeyword, MODERATION_CATEGORY_SEVERITY_CRITICAL,
+    MODERATION_CATEGORY_SEVERITY_MEDIUM, MODERATION_KEYWORD_SOURCE_JSON,
+    MODERATION_KEYWORD_SOURCE_TXT, MODERATION_SESSION_STATUS_BANNED,
+    MODERATION_SESSION_STATUS_UNBANNED,
 };
 pub use proxy::{
     default_proxy_bindings, AdminProxyBinding, AdminProxyConfig, AdminProxyConfigPatch,
@@ -95,10 +106,10 @@ pub use routes::{
 };
 pub use traits::{
     AdminAccountGroupStore, AdminAnthropicUpstreamStore, AdminCodexAccountStore, AdminConfigStore,
-    AdminKeyStore, AdminKiroAccountStore, AdminProxyStore, AdminReviewQueueStore, ControlStore,
-    ProviderRouteStore, PublicAccessStore, PublicCommunityStore, PublicStatusStore,
-    PublicSubmissionStore, PublicUsageStore, UsageAnalyticsStore, UsageEventSink,
-    UsageRollupBatchSink,
+    AdminKeyStore, AdminKiroAccountStore, AdminModerationStore, AdminProxyStore,
+    AdminReviewQueueStore, ControlStore, ProviderRouteStore, PublicAccessStore,
+    PublicCommunityStore, PublicStatusStore, PublicSubmissionStore, PublicUsageStore,
+    UsageAnalyticsStore, UsageEventSink, UsageRollupBatchSink,
 };
 pub use usage::{
     AdminLegacyKiroProxyMigration, KeyUsageRollupDelta, KeyUsageRollupLastUsedCount,

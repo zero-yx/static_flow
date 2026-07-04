@@ -82,7 +82,13 @@ use super::{
     KiroWebsearchUsageRecord, ProviderDispatchDeps, ProviderUsageMetadata, WebsearchResponseInput,
     KIRO_EMPTY_STREAM_MAX_RETRIES, MAX_PROVIDER_PROXY_BODY_BYTES,
 };
-use crate::kiro_refresh;
+use crate::{
+    kiro_refresh,
+    moderation::{
+        enforce_moderation, moderation_text_for_kiro, ModerationDecision, ModerationRequest,
+        MODERATION_BLOCKED_MESSAGE, MODERATION_PROVIDER_KIRO,
+    },
+};
 
 const INCONSISTENT_ROUTE_CONFIGURATION_MESSAGE: &str = "Route configuration is inconsistent.";
 const KIRO_SAME_ACCOUNT_MAX_ATTEMPTS: usize = 3;
@@ -182,6 +188,7 @@ pub async fn dispatch_kiro_proxy(
         kiro_session_affinity,
         kiro_latency_ranker,
         protected_thinking_signature_secret,
+        moderation_gate,
         ..
     } = deps;
     let mut usage_meta = ProviderUsageMetadata::from_request_parts(
@@ -317,6 +324,30 @@ pub async fn dispatch_kiro_proxy(
     let resolved_session =
         resolve_kiro_request_session(&request_headers, payload.metadata.as_ref());
     let affinity_session_id = kiro_affinity_session_id(&resolved_session).map(str::to_string);
+    // Keyword moderation gate: reject the request (and, on a fresh keyword hit,
+    // capture and ban the session) before any upstream work. The gate is
+    // dormant-cheap and reads only in-memory state; see `crate::moderation` for
+    // the full decision flow.
+    if let ModerationDecision::Block = enforce_moderation(
+        &moderation_gate,
+        ModerationRequest {
+            provider: MODERATION_PROVIDER_KIRO,
+            key: &key,
+            session_id: affinity_session_id.as_deref(),
+            endpoint: public_path,
+            model: &effective_model,
+            headers: &request_headers,
+            body: &body,
+            client_ip: &usage_meta.client_ip,
+        },
+        || moderation_text_for_kiro(&payload),
+    ) {
+        return kiro_json_error(
+            StatusCode::FORBIDDEN,
+            "permission_error",
+            MODERATION_BLOCKED_MESSAGE,
+        );
+    }
     if routes[0].remote_media_resolution_enabled {
         if let Err(err) = resolve_kiro_remote_media_sources(&mut payload).await {
             let message = err.to_string();

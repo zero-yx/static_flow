@@ -183,6 +183,16 @@ const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
         name: "kiro_model_group_preferences",
         sql: include_str!("../migrations/postgres/0035_kiro_model_group_preferences.sql"),
     },
+    SqlMigration {
+        version: 36,
+        name: "keyword_moderation",
+        sql: include_str!("../migrations/postgres/0036_keyword_moderation.sql"),
+    },
+    SqlMigration {
+        version: 37,
+        name: "moderation_categories",
+        sql: include_str!("../migrations/postgres/0037_moderation_categories.sql"),
+    },
 ];
 
 /// Return target DuckDB migrations in execution order.

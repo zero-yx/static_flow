@@ -18,6 +18,7 @@ use llm_access_anthropic_pool::{
     apply_anthropic_auth_headers, build_messages_url, merge_usage, parse_usage_from_value,
     AnthropicUsageSummary, SmoothWeightedRoundRobin, WeightedChannel, ANTHROPIC_VERSION_2023_06_01,
 };
+use llm_access_codex::request::extract_client_ip_from_headers;
 use llm_access_core::{
     provider::{ProtocolFamily, ProviderType},
     store::{
@@ -37,6 +38,7 @@ use super::{
     },
     client::anthropic_upstream_client,
     kiro_error::kiro_json_error,
+    kiro_model::{kiro_affinity_session_id, resolve_kiro_request_session},
     kiro_protocol::normalized_kiro_messages_path,
     limiter::{kiro_key_limit_response, try_acquire_key_permit},
     usage_meta::{
@@ -45,6 +47,10 @@ use super::{
     },
     util::{clamp_duration_ms, clamp_u64_to_i64, now_millis},
     ProviderDispatchDeps, ProviderUsageMetadata, MAX_PROVIDER_PROXY_BODY_BYTES,
+};
+use crate::moderation::{
+    enforce_moderation, moderation_text_for_kiro, ModerationDecision, ModerationRequest,
+    MODERATION_BLOCKED_MESSAGE, MODERATION_PROVIDER_KIRO,
 };
 
 static DIRECT_ANTHROPIC_SCHEDULER: LazyLock<Mutex<SmoothWeightedRoundRobin>> =
@@ -208,6 +214,17 @@ pub(super) async fn maybe_dispatch_anthropic_upstream_pool(
         original_model,
         preflight,
     } = prepared;
+    if let Some(response) = enforce_direct_anthropic_moderation(
+        &key,
+        public_path,
+        &original_model,
+        &replay.headers,
+        &replay.body,
+        &preflight.request,
+        &deps,
+    ) {
+        return AnthropicUpstreamDispatchOutcome::Handled(response);
+    }
     let preflight_stats = direct_anthropic_preflight_stats(&preflight);
     if preflight_stats.normalized() {
         tracing::info!(
@@ -256,6 +273,48 @@ pub(super) async fn maybe_dispatch_anthropic_upstream_pool(
                 "direct Anthropic upstream route is not available",
             )
         }))
+    }
+}
+
+/// Enforce the keyword moderation gate on the direct Anthropic upstream path.
+///
+/// The Anthropic-upstream pool short-circuits `dispatch_kiro_proxy` before its
+/// own moderation check runs, so this path re-applies the same gate through the
+/// shared [`enforce_moderation`] flow (see `crate::moderation`). Returns a
+/// rejection response when the session is banned or a keyword fires, else
+/// `None` to continue to upstream dispatch.
+fn enforce_direct_anthropic_moderation(
+    key: &AuthenticatedKey,
+    endpoint: &str,
+    model: &str,
+    request_headers: &HeaderMap,
+    body: &Bytes,
+    payload: &llm_access_kiro::anthropic::types::MessagesRequest,
+    deps: &ProviderDispatchDeps,
+) -> Option<axum::response::Response> {
+    let resolved_session = resolve_kiro_request_session(request_headers, payload.metadata.as_ref());
+    let affinity_session_id = kiro_affinity_session_id(&resolved_session);
+    let client_ip = extract_client_ip_from_headers(request_headers);
+    match enforce_moderation(
+        &deps.moderation_gate,
+        ModerationRequest {
+            provider: MODERATION_PROVIDER_KIRO,
+            key,
+            session_id: affinity_session_id,
+            endpoint,
+            model,
+            headers: request_headers,
+            body,
+            client_ip: &client_ip,
+        },
+        || moderation_text_for_kiro(payload),
+    ) {
+        ModerationDecision::Block => Some(kiro_json_error(
+            StatusCode::FORBIDDEN,
+            "permission_error",
+            MODERATION_BLOCKED_MESSAGE,
+        )),
+        ModerationDecision::Allow => None,
     }
 }
 

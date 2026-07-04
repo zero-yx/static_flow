@@ -21,6 +21,7 @@ use llm_access_anthropic_pool::is_private_or_loopback_ip;
 #[cfg(any(feature = "duckdb-runtime", feature = "duckdb-bundled"))]
 use llm_access_core::store::UsageEventSink;
 use llm_access_core::{
+    moderation as core_moderation,
     provider::{ProtocolFamily, ProviderType, RouteStrategy},
     store::{
         self as core_store, AdminAccountContributionRequest, AdminAccountGroupPatch,
@@ -116,6 +117,10 @@ const DEFAULT_ADMIN_REVIEW_QUEUE_LIMIT: usize = 50;
 const MAX_ADMIN_REVIEW_QUEUE_LIMIT: usize = 200;
 const DEFAULT_ADMIN_LIST_LIMIT: usize = 50;
 const MAX_ADMIN_LIST_LIMIT: usize = 200;
+/// Upper bound on keywords accepted in a single moderation import request.
+const MAX_MODERATION_KEYWORDS_PER_IMPORT: usize = 10_000;
+/// Upper bound on the character length of a single moderation keyword.
+const MAX_MODERATION_KEYWORD_CHARS: usize = 512;
 const DEFAULT_ADMIN_IMPORT_JOB_LIMIT: usize = 20;
 const MAX_ADMIN_IMPORT_JOB_LIMIT: usize = 50;
 const PROXY_CONNECTIVITY_CHECK_TIMEOUT_SECONDS: u64 = 10;
@@ -3073,6 +3078,449 @@ pub(crate) async fn test_admin_anthropic_upstream_model(
             );
             internal_error("Failed to save Anthropic upstream test status").into_response()
         },
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct AdminModerationKeywordsResponse {
+    keywords: Vec<core_store::ModerationKeyword>,
+    total: usize,
+    stats: crate::moderation::ModerationGateStats,
+    generated_at: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct AddAdminModerationKeywordsRequest {
+    /// Raw payload to parse. When `format` is `json` it must be valid keyword
+    /// JSON; otherwise it is parsed line-by-line as plain text.
+    content: String,
+    /// `txt` (default) or `json`.
+    #[serde(default)]
+    format: Option<String>,
+    /// Optional shared note applied to every imported keyword.
+    #[serde(default)]
+    note: Option<String>,
+    /// Risk-category codes applied to every keyword in this import (must be
+    /// codes that already exist in the category taxonomy).
+    #[serde(default)]
+    categories: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AddAdminModerationKeywordsResponse {
+    inserted: usize,
+    duplicates: usize,
+    parsed: usize,
+    generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminModerationCategoriesResponse {
+    categories: Vec<core_store::ModerationCategory>,
+    generated_at: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct AddAdminModerationCategoriesRequest {
+    categories: Vec<AdminModerationCategoryInput>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminModerationCategoryInput {
+    code: String,
+    label: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    severity: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AddAdminModerationCategoriesResponse {
+    inserted: usize,
+    generated_at: i64,
+}
+
+pub(crate) async fn list_admin_moderation_categories(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    match state
+        .admin_moderation_store
+        .list_moderation_categories()
+        .await
+    {
+        Ok(categories) => Json(AdminModerationCategoriesResponse {
+            categories,
+            generated_at: now_ms(),
+        })
+        .into_response(),
+        Err(_) => internal_error("Failed to list moderation categories").into_response(),
+    }
+}
+
+pub(crate) async fn add_admin_moderation_categories(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(request): Json<AddAdminModerationCategoriesRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    if request.categories.is_empty() {
+        return bad_request("no categories were provided").into_response();
+    }
+    let created_at_ms = now_ms();
+    let mut records = Vec::with_capacity(request.categories.len());
+    for input in request.categories {
+        let code = input.code.trim().to_ascii_lowercase();
+        if code.is_empty() || !code.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return bad_request(
+                "category code must be non-empty and use only [a-z0-9_] characters",
+            )
+            .into_response();
+        }
+        let label = input.label.trim().to_string();
+        if label.is_empty() {
+            return bad_request("category label must not be empty").into_response();
+        }
+        let severity = input
+            .severity
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_else(|| core_store::MODERATION_CATEGORY_SEVERITY_MEDIUM.to_string());
+        if !matches!(severity.as_str(), "critical" | "high" | "medium" | "low") {
+            return bad_request("severity must be one of critical/high/medium/low").into_response();
+        }
+        records.push(core_store::NewModerationCategory {
+            code,
+            label,
+            description: input.description.unwrap_or_default().trim().to_string(),
+            severity,
+            created_at_ms,
+        });
+    }
+    match state
+        .admin_moderation_store
+        .add_moderation_categories(records)
+        .await
+    {
+        Ok(inserted) => Json(AddAdminModerationCategoriesResponse {
+            inserted,
+            generated_at: now_ms(),
+        })
+        .into_response(),
+        Err(_) => internal_error("Failed to add moderation categories").into_response(),
+    }
+}
+
+pub(crate) async fn delete_admin_moderation_category(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(code): Path<String>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    match state
+        .admin_moderation_store
+        .delete_moderation_category(&code)
+        .await
+    {
+        Ok(Some(category)) => Json(DeleteResponse {
+            deleted: true,
+            id: category.code,
+        })
+        .into_response(),
+        Ok(None) => not_found("Moderation category not found").into_response(),
+        Err(err) => conflict(&err.to_string()).into_response(),
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct AdminModerationBannedSessionsResponse {
+    sessions: Vec<core_store::ModerationBannedSession>,
+    total: usize,
+    limit: usize,
+    offset: usize,
+    has_more: bool,
+    generated_at: i64,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub(crate) struct AdminModerationBannedSessionsQuery {
+    limit: Option<usize>,
+    offset: Option<usize>,
+    status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ReviewAdminModerationBannedSessionRequest {
+    /// `true` keeps this hit banned, `false` suppresses this reviewed hit.
+    banned: bool,
+    #[serde(default)]
+    review_note: Option<String>,
+}
+
+pub(crate) async fn list_admin_moderation_keywords(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    match state
+        .admin_moderation_store
+        .list_moderation_keywords()
+        .await
+    {
+        Ok(keywords) => Json(AdminModerationKeywordsResponse {
+            total: keywords.len(),
+            keywords,
+            stats: state.moderation_gate.stats(),
+            generated_at: now_ms(),
+        })
+        .into_response(),
+        Err(_) => internal_error("Failed to list moderation keywords").into_response(),
+    }
+}
+
+pub(crate) async fn add_admin_moderation_keywords(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(request): Json<AddAdminModerationKeywordsRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let format = request
+        .format
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_else(|| core_store::MODERATION_KEYWORD_SOURCE_TXT.to_string());
+    let (source, parsed) = match format.as_str() {
+        core_store::MODERATION_KEYWORD_SOURCE_JSON => {
+            match core_moderation::parse_moderation_keywords_json(&request.content) {
+                Ok(keywords) => (core_store::MODERATION_KEYWORD_SOURCE_JSON, keywords),
+                Err(err) => return bad_request(&err.to_string()).into_response(),
+            }
+        },
+        core_store::MODERATION_KEYWORD_SOURCE_TXT | "text" | "" => (
+            core_store::MODERATION_KEYWORD_SOURCE_TXT,
+            core_moderation::parse_moderation_keywords_txt(&request.content),
+        ),
+        other => {
+            return bad_request(&format!("unsupported keyword format `{other}`")).into_response()
+        },
+    };
+    if parsed.is_empty() {
+        return bad_request("no keywords were parsed from the payload").into_response();
+    }
+    if parsed.len() > MAX_MODERATION_KEYWORDS_PER_IMPORT {
+        return bad_request(&format!(
+            "too many keywords in one import ({}); limit is {MAX_MODERATION_KEYWORDS_PER_IMPORT}",
+            parsed.len()
+        ))
+        .into_response();
+    }
+    if let Some(oversized) = parsed
+        .iter()
+        .find(|keyword| keyword.chars().count() > MAX_MODERATION_KEYWORD_CHARS)
+    {
+        return bad_request(&format!(
+            "a keyword exceeds the {MAX_MODERATION_KEYWORD_CHARS}-character limit: {}…",
+            oversized.chars().take(40).collect::<String>()
+        ))
+        .into_response();
+    }
+    // Normalize + validate the batch-level categories against the taxonomy so a
+    // keyword can never reference a category that does not exist.
+    let mut categories: Vec<String> = request
+        .categories
+        .iter()
+        .map(|code| code.trim().to_string())
+        .filter(|code| !code.is_empty())
+        .collect();
+    categories.sort();
+    categories.dedup();
+    if !categories.is_empty() {
+        let known = match state
+            .admin_moderation_store
+            .list_moderation_categories()
+            .await
+        {
+            Ok(known) => known,
+            Err(_) => {
+                return internal_error("Failed to load moderation categories").into_response()
+            },
+        };
+        let known: std::collections::HashSet<&str> = known
+            .iter()
+            .map(|category| category.code.as_str())
+            .collect();
+        if let Some(unknown) = categories
+            .iter()
+            .find(|code| !known.contains(code.as_str()))
+        {
+            return bad_request(&format!("unknown category code `{unknown}`")).into_response();
+        }
+    }
+    let note = request
+        .note
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let parsed_count = parsed.len();
+    let created_at_ms = now_ms();
+    let records: Vec<core_store::NewModerationKeyword> = parsed
+        .into_iter()
+        .map(|keyword| core_store::NewModerationKeyword {
+            keyword,
+            categories: categories.clone(),
+            note: note.clone(),
+            source: source.to_string(),
+            created_at_ms,
+        })
+        .collect();
+    match state
+        .admin_moderation_store
+        .add_moderation_keywords(records)
+        .await
+    {
+        Ok(outcome) => {
+            reload_moderation_gate(&state).await;
+            Json(AddAdminModerationKeywordsResponse {
+                inserted: outcome.inserted,
+                duplicates: outcome.duplicates,
+                parsed: parsed_count,
+                generated_at: now_ms(),
+            })
+            .into_response()
+        },
+        Err(_) => internal_error("Failed to import moderation keywords").into_response(),
+    }
+}
+
+pub(crate) async fn delete_admin_moderation_keyword(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    match state
+        .admin_moderation_store
+        .delete_moderation_keyword(id)
+        .await
+    {
+        Ok(Some(keyword)) => {
+            reload_moderation_gate(&state).await;
+            Json(DeleteResponse {
+                deleted: true,
+                id: keyword.id.to_string(),
+            })
+            .into_response()
+        },
+        Ok(None) => not_found("Moderation keyword not found").into_response(),
+        Err(_) => internal_error("Failed to delete moderation keyword").into_response(),
+    }
+}
+
+pub(crate) async fn list_admin_moderation_banned_sessions(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Query(query): Query<AdminModerationBannedSessionsQuery>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let page_request = core_store::AdminPageRequest {
+        limit: query
+            .limit
+            .unwrap_or(DEFAULT_ADMIN_LIST_LIMIT)
+            .clamp(1, MAX_ADMIN_LIST_LIMIT),
+        offset: query.offset.unwrap_or(0),
+    };
+    let status = query
+        .status
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "all");
+    match state
+        .admin_moderation_store
+        .list_moderation_banned_sessions(page_request, status)
+        .await
+    {
+        Ok(page) => Json(AdminModerationBannedSessionsResponse {
+            sessions: page.sessions,
+            total: page.total,
+            limit: page.limit,
+            offset: page.offset,
+            has_more: page.has_more,
+            generated_at: now_ms(),
+        })
+        .into_response(),
+        Err(_) => internal_error("Failed to list banned sessions").into_response(),
+    }
+}
+
+pub(crate) async fn get_admin_moderation_banned_session(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    match state
+        .admin_moderation_store
+        .get_moderation_banned_session(id)
+        .await
+    {
+        Ok(Some(detail)) => Json(detail).into_response(),
+        Ok(None) => not_found("Banned session not found").into_response(),
+        Err(_) => internal_error("Failed to load banned session").into_response(),
+    }
+}
+
+pub(crate) async fn review_admin_moderation_banned_session(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(request): Json<ReviewAdminModerationBannedSessionRequest>,
+) -> Response {
+    if let Err(response) = ensure_admin_access(&headers) {
+        return response.into_response();
+    }
+    let status = if request.banned {
+        core_store::MODERATION_SESSION_STATUS_BANNED
+    } else {
+        core_store::MODERATION_SESSION_STATUS_UNBANNED
+    };
+    match state
+        .admin_moderation_store
+        .set_moderation_banned_session_status(id, status, request.review_note.as_deref(), now_ms())
+        .await
+    {
+        Ok(Some(session)) => {
+            reload_moderation_gate(&state).await;
+            Json(session).into_response()
+        },
+        Ok(None) => not_found("Banned session not found").into_response(),
+        Err(_) => internal_error("Failed to review banned session").into_response(),
+    }
+}
+
+async fn reload_moderation_gate(state: &HttpState) {
+    if let Err(err) = state.moderation_gate.reload().await {
+        tracing::warn!("failed to reload moderation gate after admin change: {err:#}");
     }
 }
 

@@ -207,6 +207,7 @@ pub struct ProviderState {
     kiro_latency_ranker: Arc<KiroLatencyRanker>,
     request_activity: Arc<RequestActivityTracker>,
     protected_thinking_signature_secret: Option<Arc<str>>,
+    moderation_gate: Arc<crate::moderation::ModerationGate>,
 }
 
 /// Runtime dependencies passed from the authenticated provider entrypoint into
@@ -227,6 +228,7 @@ pub struct ProviderDispatchDeps {
     kiro_session_affinity: Arc<KiroSessionAffinity>,
     kiro_latency_ranker: Arc<KiroLatencyRanker>,
     protected_thinking_signature_secret: Option<Arc<str>>,
+    moderation_gate: Arc<crate::moderation::ModerationGate>,
 }
 
 struct ForcedProxyRouteStore {

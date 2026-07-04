@@ -11,6 +11,7 @@ pub mod admin_llm_gateway_monitor;
 pub mod admin_local_media;
 #[cfg(feature = "local-media")]
 pub mod admin_local_media_player;
+pub mod admin_moderation;
 pub mod admin_music_wish_stream;
 pub mod article_detail;
 pub mod article_raw;

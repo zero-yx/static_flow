@@ -47,6 +47,7 @@ httparse = "1"
 lru = "0.16.3"
 once_cell = "1"
 ahash = "0.8.12"
+aho-corasick = "1.1"
 
 # 日志
 log = "0.4"

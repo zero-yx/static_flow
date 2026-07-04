@@ -6631,6 +6631,7 @@ pub fn admin_llm_gateway_page() -> Html {
                         <div class={classes!("flex", "gap-2", "flex-wrap")}>
                             <Link<Route> to={Route::Admin} classes={classes!("btn-terminal")}>{ "Admin 首页" }</Link<Route>>
                             <Link<Route> to={Route::AdminLlmGatewayMonitor} classes={classes!("btn-terminal")}>{ "监控页" }</Link<Route>>
+                            <Link<Route> to={Route::AdminLlmGatewayModeration} classes={classes!("btn-terminal")}>{ "关键词审核" }</Link<Route>>
                             <Link<Route> to={Route::LlmAccess} classes={classes!("btn-terminal", "btn-terminal-primary")}>{ "公共页" }</Link<Route>>
                         </div>
                     </div>
