@@ -88,6 +88,7 @@ fn normalized_session_status_filter(status: Option<&str>) -> anyhow::Result<Opti
     match status.map(str::trim).filter(|value| !value.is_empty()) {
         None => Ok(None),
         Some("all") => Ok(None),
+        Some("active") => Ok(Some(MODERATION_SESSION_STATUS_BANNED)),
         Some(MODERATION_SESSION_STATUS_BANNED) => Ok(Some(MODERATION_SESSION_STATUS_BANNED)),
         Some(MODERATION_SESSION_STATUS_UNBANNED) => Ok(Some(MODERATION_SESSION_STATUS_UNBANNED)),
         Some(other) => anyhow::bail!("unsupported moderation session status filter `{other}`"),
@@ -670,5 +671,18 @@ impl AdminModerationStore for PostgresControlRepository {
             .await
             .context("update postgres moderation banned session status")?;
         Ok(row.as_ref().map(moderation_banned_session_from_row))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalized_session_status_filter_accepts_active_as_banned_alias() {
+        let normalized = normalized_session_status_filter(Some("active"))
+            .expect("active should be accepted as a legacy banned-session status");
+
+        assert_eq!(normalized, Some(MODERATION_SESSION_STATUS_BANNED));
     }
 }
