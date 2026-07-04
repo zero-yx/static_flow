@@ -4,11 +4,13 @@
 use anyhow::Context;
 use async_trait::async_trait;
 use llm_access_core::store::{
-    AdminModerationStore, AdminPageRequest, ModerationBannedSession, ModerationBannedSessionDetail,
-    ModerationBannedSessionsPage, ModerationCategory, ModerationKeyword,
-    ModerationKeywordImportOutcome, ModerationRuntimeSnapshot, ModerationSuppressedHit,
-    NewModerationBannedSession, NewModerationCategory, NewModerationKeyword,
-    MODERATION_SESSION_STATUS_BANNED, MODERATION_SESSION_STATUS_UNBANNED,
+    AdminModerationBannedSessionPageQuery, AdminModerationKeywordPageQuery, AdminModerationStore,
+    AdminPageRequest, ModerationBannedSession, ModerationBannedSessionDetail,
+    ModerationBannedSessionRef, ModerationBannedSessionsPage, ModerationCategory,
+    ModerationKeyword, ModerationKeywordImportOutcome, ModerationKeywordsPage,
+    ModerationRuntimeSnapshot, ModerationSuppressedHit, NewModerationBannedSession,
+    NewModerationCategory, NewModerationKeyword, MODERATION_SESSION_STATUS_BANNED,
+    MODERATION_SESSION_STATUS_UNBANNED,
 };
 
 use super::{now_ms, PgRow, PostgresControlRepository};
@@ -85,10 +87,32 @@ fn moderation_banned_session_from_row(row: &PgRow) -> ModerationBannedSession {
 fn normalized_session_status_filter(status: Option<&str>) -> anyhow::Result<Option<&str>> {
     match status.map(str::trim).filter(|value| !value.is_empty()) {
         None => Ok(None),
+        Some("all") => Ok(None),
         Some(MODERATION_SESSION_STATUS_BANNED) => Ok(Some(MODERATION_SESSION_STATUS_BANNED)),
         Some(MODERATION_SESSION_STATUS_UNBANNED) => Ok(Some(MODERATION_SESSION_STATUS_UNBANNED)),
         Some(other) => anyhow::bail!("unsupported moderation session status filter `{other}`"),
     }
+}
+
+fn normalized_banned_session_search_filter(search: Option<&str>) -> Option<String> {
+    search
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("%{value}%"))
+}
+
+fn normalized_keyword_search_filter(search: Option<&str>) -> Option<String> {
+    search
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_lowercase)
+}
+
+fn compact_keyword_search_filter(search: &str) -> String {
+    search
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect()
 }
 
 #[async_trait]
@@ -99,14 +123,21 @@ impl AdminModerationStore for PostgresControlRepository {
         let banned_rows = self
             .client
             .query(
-                "SELECT DISTINCT session_key
+                "SELECT DISTINCT ON (session_key) session_key, hit_key
                  FROM llm_moderation_banned_sessions
-                 WHERE status = 'banned'",
+                 WHERE status = 'banned'
+                 ORDER BY session_key, banned_at_ms ASC, id ASC",
                 &[],
             )
             .await
-            .context("load postgres moderation banned session keys")?;
-        let banned_session_keys = banned_rows.iter().map(|row| row.get(0)).collect();
+            .context("load postgres moderation banned session refs")?;
+        let banned_sessions = banned_rows
+            .iter()
+            .map(|row| ModerationBannedSessionRef {
+                session_key: row.get(0),
+                hit_key: row.get(1),
+            })
+            .collect();
         let suppressed_rows = self
             .client
             .query(
@@ -131,7 +162,7 @@ impl AdminModerationStore for PostgresControlRepository {
             .collect();
         Ok(ModerationRuntimeSnapshot {
             keywords,
-            banned_session_keys,
+            banned_sessions,
             suppressed_hits,
         })
     }
@@ -236,6 +267,83 @@ impl AdminModerationStore for PostgresControlRepository {
             .await
             .context("list postgres moderation keywords")?;
         Ok(rows.iter().map(moderation_keyword_from_row).collect())
+    }
+
+    async fn list_moderation_keywords_page(
+        &self,
+        page: AdminPageRequest,
+        query: &AdminModerationKeywordPageQuery,
+    ) -> anyhow::Result<ModerationKeywordsPage> {
+        self.ensure_connection_alive()?;
+        let limit = page.limit.max(1);
+        let limit_i64 = limit.min(i64::MAX as usize) as i64;
+        let offset_i64 = page.offset.min(i64::MAX as usize) as i64;
+        let search = normalized_keyword_search_filter(query.search.as_deref());
+        let (total, rows) = match search {
+            Some(search) => {
+                let pattern = format!("%{search}%");
+                let compact_pattern = format!("%{}%", compact_keyword_search_filter(&search));
+                let where_clause = "keyword ILIKE $1
+                    OR replace(keyword, ' ', '') ILIKE $2
+                    OR COALESCE(note, '') ILIKE $1
+                    OR source ILIKE $1
+                    OR category_codes::text ILIKE $1";
+                let total: i64 = self
+                    .client
+                    .query_one(
+                        &format!(
+                            "SELECT COUNT(*) FROM llm_moderation_keywords WHERE {where_clause}"
+                        ),
+                        &[&pattern, &compact_pattern],
+                    )
+                    .await
+                    .context("count postgres moderation keywords")?
+                    .get(0);
+                let sql = format!(
+                    "SELECT {MODERATION_KEYWORD_COLUMNS}
+                     FROM llm_moderation_keywords
+                     WHERE {where_clause}
+                     ORDER BY id DESC
+                     LIMIT $3 OFFSET $4"
+                );
+                let rows = self
+                    .client
+                    .query(&sql, &[&pattern, &compact_pattern, &limit_i64, &offset_i64])
+                    .await
+                    .context("list postgres moderation keywords page")?;
+                (total, rows)
+            },
+            None => {
+                let total: i64 = self
+                    .client
+                    .query_one("SELECT COUNT(*) FROM llm_moderation_keywords", &[])
+                    .await
+                    .context("count postgres moderation keywords")?
+                    .get(0);
+                let sql = format!(
+                    "SELECT {MODERATION_KEYWORD_COLUMNS}
+                     FROM llm_moderation_keywords
+                     ORDER BY id DESC
+                     LIMIT $1 OFFSET $2"
+                );
+                let rows = self
+                    .client
+                    .query(&sql, &[&limit_i64, &offset_i64])
+                    .await
+                    .context("list postgres moderation keywords page")?;
+                (total, rows)
+            },
+        };
+        let keywords: Vec<ModerationKeyword> =
+            rows.iter().map(moderation_keyword_from_row).collect();
+        let total = total.max(0) as usize;
+        Ok(ModerationKeywordsPage {
+            has_more: page.offset.saturating_add(keywords.len()) < total,
+            keywords,
+            total,
+            limit,
+            offset: page.offset,
+        })
     }
 
     async fn add_moderation_keywords(
@@ -365,15 +473,57 @@ impl AdminModerationStore for PostgresControlRepository {
     async fn list_moderation_banned_sessions(
         &self,
         page: AdminPageRequest,
-        status: Option<&str>,
+        query: &AdminModerationBannedSessionPageQuery,
     ) -> anyhow::Result<ModerationBannedSessionsPage> {
         self.ensure_connection_alive()?;
-        let status = normalized_session_status_filter(status)?;
+        let status = normalized_session_status_filter(query.status.as_deref())?;
+        let search = normalized_banned_session_search_filter(query.search.as_deref());
         let limit = page.limit.max(1);
         let limit_i64 = limit.min(i64::MAX as usize) as i64;
         let offset_i64 = page.offset.min(i64::MAX as usize) as i64;
-        let (total, rows) = match status {
-            Some(status) => {
+        let search_clause = "(hit_key ILIKE $SEARCH
+                         OR session_key ILIKE $SEARCH
+                         OR session_id ILIKE $SEARCH
+                         OR key_id ILIKE $SEARCH
+                         OR key_name ILIKE $SEARCH
+                         OR matched_keyword ILIKE $SEARCH
+                         OR matched_context ILIKE $SEARCH
+                         OR endpoint ILIKE $SEARCH
+                         OR model ILIKE $SEARCH
+                         OR client_ip ILIKE $SEARCH
+                         OR COALESCE(review_note, '') ILIKE $SEARCH
+                         OR matched_categories::text ILIKE $SEARCH)";
+        let (total, rows) = match (status, search.as_deref()) {
+            (Some(status), Some(search)) => {
+                let total_sql = search_clause.replace("$SEARCH", "$2");
+                let total: i64 = self
+                    .client
+                    .query_one(
+                        &format!(
+                            "SELECT COUNT(*) FROM llm_moderation_banned_sessions
+                             WHERE status = $1 AND {total_sql}"
+                        ),
+                        &[&status, &search],
+                    )
+                    .await
+                    .context("count postgres moderation banned sessions")?
+                    .get(0);
+                let list_sql = search_clause.replace("$SEARCH", "$2");
+                let sql = format!(
+                    "SELECT {MODERATION_BANNED_SESSION_COLUMNS}
+                     FROM llm_moderation_banned_sessions
+                     WHERE status = $1 AND {list_sql}
+                     ORDER BY banned_at_ms DESC, id DESC
+                     LIMIT $3 OFFSET $4"
+                );
+                let rows = self
+                    .client
+                    .query(&sql, &[&status, &search, &limit_i64, &offset_i64])
+                    .await
+                    .context("list postgres moderation banned sessions")?;
+                (total, rows)
+            },
+            (Some(status), None) => {
                 let total: i64 = self
                     .client
                     .query_one(
@@ -397,7 +547,36 @@ impl AdminModerationStore for PostgresControlRepository {
                     .context("list postgres moderation banned sessions")?;
                 (total, rows)
             },
-            None => {
+            (None, Some(search)) => {
+                let total_sql = search_clause.replace("$SEARCH", "$1");
+                let total: i64 = self
+                    .client
+                    .query_one(
+                        &format!(
+                            "SELECT COUNT(*) FROM llm_moderation_banned_sessions
+                             WHERE {total_sql}"
+                        ),
+                        &[&search],
+                    )
+                    .await
+                    .context("count postgres moderation banned sessions")?
+                    .get(0);
+                let list_sql = search_clause.replace("$SEARCH", "$1");
+                let sql = format!(
+                    "SELECT {MODERATION_BANNED_SESSION_COLUMNS}
+                     FROM llm_moderation_banned_sessions
+                     WHERE {list_sql}
+                     ORDER BY banned_at_ms DESC, id DESC
+                     LIMIT $2 OFFSET $3"
+                );
+                let rows = self
+                    .client
+                    .query(&sql, &[&search, &limit_i64, &offset_i64])
+                    .await
+                    .context("list postgres moderation banned sessions")?;
+                (total, rows)
+            },
+            (None, None) => {
                 let total: i64 = self
                     .client
                     .query_one("SELECT COUNT(*) FROM llm_moderation_banned_sessions", &[])

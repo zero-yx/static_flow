@@ -82,8 +82,8 @@ use super::{
 use crate::{
     codex_refresh,
     moderation::{
-        enforce_moderation, moderation_text_for_json_body, ModerationDecision, ModerationRequest,
-        MODERATION_BLOCKED_MESSAGE, MODERATION_PROVIDER_CODEX,
+        enforce_moderation, moderation_blocked_message, moderation_text_for_json_body,
+        ModerationDecision, ModerationRequest, MODERATION_PROVIDER_CODEX,
     },
 };
 
@@ -261,7 +261,9 @@ pub async fn dispatch_codex_proxy(
         .filter(|value| !value.is_empty());
     // Keyword moderation gate: reject (and, on a fresh keyword hit, capture and
     // ban the session) before any upstream work. See `crate::moderation`.
-    if let ModerationDecision::Block = enforce_moderation(
+    if let ModerationDecision::Block {
+        review_id,
+    } = enforce_moderation(
         &moderation_gate,
         ModerationRequest {
             provider: MODERATION_PROVIDER_CODEX,
@@ -276,11 +278,8 @@ pub async fn dispatch_codex_proxy(
         || moderation_text_for_json_body(&body).unwrap_or_default(),
     ) {
         usage_meta.mark_session_blocked();
-        return codex_surface_error_response(
-            &gateway_path,
-            StatusCode::FORBIDDEN,
-            MODERATION_BLOCKED_MESSAGE,
-        );
+        let message = moderation_blocked_message(&review_id);
+        return codex_surface_error_response(&gateway_path, StatusCode::FORBIDDEN, &message);
     }
     if strict_session_rejection_enabled {
         if let Some((affinity_id, rejection)) = codex_affinity_id.as_ref().and_then(|id| {

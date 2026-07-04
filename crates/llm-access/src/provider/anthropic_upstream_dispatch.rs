@@ -49,8 +49,8 @@ use super::{
     ProviderDispatchDeps, ProviderUsageMetadata, MAX_PROVIDER_PROXY_BODY_BYTES,
 };
 use crate::moderation::{
-    enforce_moderation, moderation_text_for_kiro, ModerationDecision, ModerationRequest,
-    MODERATION_BLOCKED_MESSAGE, MODERATION_PROVIDER_KIRO,
+    enforce_moderation, moderation_blocked_message, moderation_text_for_kiro, ModerationDecision,
+    ModerationRequest, MODERATION_PROVIDER_KIRO,
 };
 
 static DIRECT_ANTHROPIC_SCHEDULER: LazyLock<Mutex<SmoothWeightedRoundRobin>> =
@@ -309,11 +309,12 @@ fn enforce_direct_anthropic_moderation(
         },
         || moderation_text_for_kiro(payload),
     ) {
-        ModerationDecision::Block => Some(kiro_json_error(
-            StatusCode::FORBIDDEN,
-            "permission_error",
-            MODERATION_BLOCKED_MESSAGE,
-        )),
+        ModerationDecision::Block {
+            review_id,
+        } => {
+            let message = moderation_blocked_message(&review_id);
+            Some(kiro_json_error(StatusCode::FORBIDDEN, "permission_error", &message))
+        },
         ModerationDecision::Allow => None,
     }
 }

@@ -11024,6 +11024,9 @@ pub struct ModerationGateStatsView {
 pub struct AdminModerationKeywordsResponse {
     pub keywords: Vec<ModerationKeywordView>,
     pub total: usize,
+    pub limit: usize,
+    pub offset: usize,
+    pub has_more: bool,
     pub stats: ModerationGateStatsView,
     pub generated_at: i64,
 }
@@ -12258,15 +12261,29 @@ pub async fn delete_admin_moderation_category(code: &str) -> Result<(), String> 
     }
 }
 
-pub async fn fetch_admin_moderation_keywords() -> Result<AdminModerationKeywordsResponse, String> {
+pub async fn fetch_admin_moderation_keywords(
+    search: &str,
+    limit: usize,
+    offset: usize,
+) -> Result<AdminModerationKeywordsResponse, String> {
     #[cfg(feature = "mock")]
     {
+        let _ = (search, limit, offset);
         Ok(AdminModerationKeywordsResponse::default())
     }
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!("{}/admin/llm-gateway/moderation/keywords", llm_access_admin_base());
+        let mut params = vec![format!("limit={limit}"), format!("offset={offset}")];
+        let trimmed = search.trim();
+        if !trimmed.is_empty() {
+            params.push(format!("q={}", urlencoding::encode(trimmed)));
+        }
+        let url = format!(
+            "{}/admin/llm-gateway/moderation/keywords?{}",
+            llm_access_admin_base(),
+            params.join("&")
+        );
         let response = api_get(&url)
             .send()
             .await
@@ -12335,23 +12352,29 @@ pub async fn delete_admin_moderation_keyword(id: i64) -> Result<(), String> {
 
 pub async fn fetch_admin_moderation_banned_sessions(
     status: &str,
+    search: &str,
     limit: usize,
     offset: usize,
 ) -> Result<AdminModerationBannedSessionsResponse, String> {
     #[cfg(feature = "mock")]
     {
-        let _ = (status, limit, offset);
+        let _ = (status, search, limit, offset);
         Ok(AdminModerationBannedSessionsResponse::default())
     }
 
     #[cfg(not(feature = "mock"))]
     {
-        let url = format!(
+        let mut url = format!(
             "{}/admin/llm-gateway/moderation/banned-sessions?status={}&limit={limit}&\
              offset={offset}",
             llm_access_admin_base(),
             urlencoding::encode(status)
         );
+        let search = search.trim();
+        if !search.is_empty() {
+            url.push_str("&q=");
+            url.push_str(&urlencoding::encode(search));
+        }
         let response = api_get(&url)
             .send()
             .await

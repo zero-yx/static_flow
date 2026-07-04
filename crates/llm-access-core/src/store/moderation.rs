@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::AdminPageRequest;
+
 /// Ban record status: the session is actively blocked.
 pub const MODERATION_SESSION_STATUS_BANNED: &str = "banned";
 /// Ban record status: a reviewer cleared this hit; later scans skip this hit
@@ -92,6 +94,110 @@ pub struct ModerationKeywordImportOutcome {
     pub inserted: usize,
     /// Keywords skipped because they already existed.
     pub duplicates: usize,
+}
+
+/// Admin moderation keyword list filters.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdminModerationKeywordPageQuery {
+    /// Case-insensitive search over keyword, note, source, and category codes.
+    #[serde(default)]
+    pub search: Option<String>,
+}
+
+/// Page of configured moderation keywords.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModerationKeywordsPage {
+    /// Page rows.
+    pub keywords: Vec<ModerationKeyword>,
+    /// Total rows matching the query before pagination.
+    pub total: usize,
+    /// Page limit.
+    pub limit: usize,
+    /// Page offset.
+    pub offset: usize,
+    /// Whether another page is available.
+    pub has_more: bool,
+}
+
+/// Apply the admin keyword search and pagination contract to an in-memory list.
+pub fn page_moderation_keywords(
+    keywords: Vec<ModerationKeyword>,
+    query: &AdminModerationKeywordPageQuery,
+    page: AdminPageRequest,
+) -> ModerationKeywordsPage {
+    let search = normalized_keyword_search(query.search.as_deref());
+    let compact_search = search
+        .as_deref()
+        .map(compact_keyword_search_text)
+        .filter(|value| !value.is_empty());
+    let filtered: Vec<ModerationKeyword> = keywords
+        .into_iter()
+        .filter(|keyword| {
+            moderation_keyword_matches_query(keyword, search.as_deref(), compact_search.as_deref())
+        })
+        .collect();
+    let total = filtered.len();
+    let limit = page.limit.max(1);
+    let keywords = filtered
+        .into_iter()
+        .skip(page.offset)
+        .take(limit)
+        .collect::<Vec<_>>();
+    ModerationKeywordsPage {
+        has_more: page.has_more(keywords.len(), total),
+        keywords,
+        total,
+        limit,
+        offset: page.offset,
+    }
+}
+
+fn normalized_keyword_search(search: Option<&str>) -> Option<String> {
+    search
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_lowercase)
+}
+
+fn compact_keyword_search_text(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .flat_map(|character| character.to_lowercase())
+        .collect()
+}
+
+fn moderation_keyword_matches_query(
+    keyword: &ModerationKeyword,
+    search: Option<&str>,
+    compact_search: Option<&str>,
+) -> bool {
+    let Some(search) = search else {
+        return true;
+    };
+    let keyword_text = keyword.keyword.to_lowercase();
+    if keyword_text.contains(search) {
+        return true;
+    }
+    if compact_search
+        .is_some_and(|needle| compact_keyword_search_text(&keyword.keyword).contains(needle))
+    {
+        return true;
+    }
+    if keyword
+        .note
+        .as_deref()
+        .is_some_and(|note| note.to_lowercase().contains(search))
+    {
+        return true;
+    }
+    if keyword.source.to_lowercase().contains(search) {
+        return true;
+    }
+    keyword
+        .categories
+        .iter()
+        .any(|category| category.to_lowercase().contains(search))
 }
 
 /// Banned-session card without the captured request payload.
@@ -232,13 +338,135 @@ pub struct ModerationBannedSessionsPage {
     pub has_more: bool,
 }
 
+/// Admin banned-session list filters.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdminModerationBannedSessionPageQuery {
+    /// `banned`, `unbanned`, or `all`/empty for every status.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// Case-insensitive search over hit/session/key/request metadata.
+    #[serde(default)]
+    pub search: Option<String>,
+}
+
+/// Active ban reference loaded into the runtime gate.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModerationBannedSessionRef {
+    /// Runtime ban key, kept internal because it contains the authenticated key
+    /// id.
+    pub session_key: String,
+    /// Public-safe review id for the active hit.
+    pub hit_key: String,
+}
+
 /// Compact startup/refresh snapshot for the in-memory moderation gate.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ModerationRuntimeSnapshot {
     /// All configured keywords.
     pub keywords: Vec<ModerationKeyword>,
-    /// Session keys with `banned` status.
-    pub banned_session_keys: Vec<String>,
+    /// Session keys with `banned` status and their visible review ids.
+    pub banned_sessions: Vec<ModerationBannedSessionRef>,
     /// Reviewed false-positive hits with `unbanned` status.
     pub suppressed_hits: Vec<ModerationSuppressedHit>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::AdminPageRequest;
+
+    fn keyword(
+        id: i64,
+        keyword: &str,
+        categories: &[&str],
+        note: Option<&str>,
+    ) -> ModerationKeyword {
+        ModerationKeyword {
+            id,
+            keyword: keyword.to_string(),
+            categories: categories.iter().map(|value| value.to_string()).collect(),
+            note: note.map(str::to_string),
+            source: MODERATION_KEYWORD_SOURCE_TXT.to_string(),
+            created_at_ms: id,
+        }
+    }
+
+    #[test]
+    fn moderation_keyword_query_matches_keyword_note_source_category_and_compacted_spacing() {
+        let keywords = vec![
+            keyword(1, "自 慰 描 写", &["sexual"], Some("manual review")),
+            keyword(2, "build a bomb", &["weapons"], Some("danger note")),
+            keyword(3, "carding tutorial", &["cyber"], None),
+        ];
+
+        let compacted = page_moderation_keywords(
+            keywords.clone(),
+            &AdminModerationKeywordPageQuery {
+                search: Some("自慰".to_string()),
+            },
+            AdminPageRequest {
+                limit: 10,
+                offset: 0,
+            },
+        );
+        assert_eq!(compacted.total, 1);
+        assert_eq!(compacted.keywords[0].keyword, "自 慰 描 写");
+
+        let note = page_moderation_keywords(
+            keywords.clone(),
+            &AdminModerationKeywordPageQuery {
+                search: Some("DANGER".to_string()),
+            },
+            AdminPageRequest {
+                limit: 10,
+                offset: 0,
+            },
+        );
+        assert_eq!(note.total, 1);
+        assert_eq!(note.keywords[0].keyword, "build a bomb");
+
+        let category = page_moderation_keywords(
+            keywords,
+            &AdminModerationKeywordPageQuery {
+                search: Some("cyber".to_string()),
+            },
+            AdminPageRequest {
+                limit: 10,
+                offset: 0,
+            },
+        );
+        assert_eq!(category.total, 1);
+        assert_eq!(category.keywords[0].keyword, "carding tutorial");
+    }
+
+    #[test]
+    fn moderation_keyword_page_reports_limit_offset_and_has_more() {
+        let keywords = vec![
+            keyword(4, "four", &[], None),
+            keyword(3, "three", &[], None),
+            keyword(2, "two", &[], None),
+            keyword(1, "one", &[], None),
+        ];
+
+        let page = page_moderation_keywords(
+            keywords,
+            &AdminModerationKeywordPageQuery::default(),
+            AdminPageRequest {
+                limit: 2,
+                offset: 1,
+            },
+        );
+
+        assert_eq!(page.total, 4);
+        assert_eq!(page.limit, 2);
+        assert_eq!(page.offset, 1);
+        assert!(page.has_more);
+        assert_eq!(
+            page.keywords
+                .iter()
+                .map(|keyword| keyword.keyword.as_str())
+                .collect::<Vec<_>>(),
+            vec!["three", "two"]
+        );
+    }
 }

@@ -32,10 +32,11 @@ use super::{
         KiroStatusRefreshTarget, NewAdminKiroAccount,
     },
     moderation::{
+        AdminModerationBannedSessionPageQuery, AdminModerationKeywordPageQuery,
         ModerationBannedSession, ModerationBannedSessionDetail, ModerationBannedSessionsPage,
         ModerationCategory, ModerationKeyword, ModerationKeywordImportOutcome,
-        ModerationRuntimeSnapshot, NewModerationBannedSession, NewModerationCategory,
-        NewModerationKeyword,
+        ModerationKeywordsPage, ModerationRuntimeSnapshot, NewModerationBannedSession,
+        NewModerationCategory, NewModerationKeyword,
     },
     proxy::{
         default_proxy_binding, default_proxy_bindings, AdminProxyBinding, AdminProxyConfig,
@@ -110,6 +111,20 @@ impl AdminModerationStore for EmptyAdminModerationStore {
         Ok(Vec::new())
     }
 
+    async fn list_moderation_keywords_page(
+        &self,
+        page: AdminPageRequest,
+        _query: &AdminModerationKeywordPageQuery,
+    ) -> anyhow::Result<ModerationKeywordsPage> {
+        Ok(ModerationKeywordsPage {
+            keywords: Vec::new(),
+            total: 0,
+            limit: page.limit.max(1),
+            offset: page.offset,
+            has_more: false,
+        })
+    }
+
     async fn add_moderation_keywords(
         &self,
         _keywords: Vec<NewModerationKeyword>,
@@ -134,7 +149,7 @@ impl AdminModerationStore for EmptyAdminModerationStore {
     async fn list_moderation_banned_sessions(
         &self,
         page: AdminPageRequest,
-        _status: Option<&str>,
+        _query: &AdminModerationBannedSessionPageQuery,
     ) -> anyhow::Result<ModerationBannedSessionsPage> {
         Ok(ModerationBannedSessionsPage {
             sessions: Vec::new(),

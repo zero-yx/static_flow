@@ -32,6 +32,7 @@ use crate::{
 const TAB_KEYWORDS: &str = "keywords";
 const TAB_SESSIONS: &str = "sessions";
 const TAB_CATEGORIES: &str = "categories";
+const KEYWORDS_PAGE_SIZE: usize = 50;
 const SESSIONS_PAGE_SIZE: usize = 50;
 
 fn provider_badge(provider: &str) -> Classes {
@@ -113,11 +114,14 @@ pub fn admin_moderation_page() -> Html {
     let import_note = use_state(String::new);
     let import_categories = use_state(Vec::<String>::new);
     let importing = use_state(|| false);
+    let keyword_search = use_state(String::new);
+    let keyword_offset = use_state(|| 0usize);
 
     // Banned session tab state.
     let sessions = use_state(AdminModerationBannedSessionsResponse::default);
     let sessions_loading = use_state(|| true);
     let session_status = use_state(|| "banned".to_string());
+    let session_search = use_state(String::new);
     let session_offset = use_state(|| 0usize);
     let selected_detail = use_state(|| None::<ModerationBannedSessionDetailView>);
     let detail_loading = use_state(|| false);
@@ -169,11 +173,14 @@ pub fn admin_moderation_page() -> Html {
         let keywords = keywords.clone();
         let keywords_loading = keywords_loading.clone();
         let error = error.clone();
+        let search = (*keyword_search).clone();
+        let offset = *keyword_offset;
         let tick = *refresh_tick;
-        use_effect_with(tick, move |_| {
+        let deps = (tick, search.clone(), offset);
+        use_effect_with(deps, move |_| {
             keywords_loading.set(true);
             wasm_bindgen_futures::spawn_local(async move {
-                match fetch_admin_moderation_keywords().await {
+                match fetch_admin_moderation_keywords(&search, KEYWORDS_PAGE_SIZE, offset).await {
                     Ok(response) => {
                         error.set(None);
                         keywords.set(response);
@@ -192,13 +199,19 @@ pub fn admin_moderation_page() -> Html {
         let sessions_loading = sessions_loading.clone();
         let error = error.clone();
         let status = (*session_status).clone();
+        let search = (*session_search).clone();
         let offset = *session_offset;
-        let deps = (*refresh_tick, status.clone(), offset);
+        let deps = (*refresh_tick, status.clone(), search.clone(), offset);
         use_effect_with(deps, move |_| {
             sessions_loading.set(true);
             wasm_bindgen_futures::spawn_local(async move {
-                match fetch_admin_moderation_banned_sessions(&status, SESSIONS_PAGE_SIZE, offset)
-                    .await
+                match fetch_admin_moderation_banned_sessions(
+                    &status,
+                    &search,
+                    SESSIONS_PAGE_SIZE,
+                    offset,
+                )
+                .await
                 {
                     Ok(response) => {
                         error.set(None);
@@ -274,6 +287,8 @@ pub fn admin_moderation_page() -> Html {
         let importing = importing.clone();
         let keywords = keywords.clone();
         let keywords_loading = keywords_loading.clone();
+        let keyword_search = keyword_search.clone();
+        let keyword_offset = keyword_offset.clone();
         let categories = categories.clone();
         let category_lookup = category_lookup.clone();
         let notify = notify.clone();
@@ -300,8 +315,39 @@ pub fn admin_moderation_page() -> Html {
                 import_note.set(target.value());
             })
         };
+        let on_keyword_search_input = {
+            let keyword_search = keyword_search.clone();
+            let keyword_offset = keyword_offset.clone();
+            Callback::from(move |e: InputEvent| {
+                let target: HtmlInputElement = e.target_unchecked_into();
+                keyword_search.set(target.value());
+                keyword_offset.set(0);
+            })
+        };
+        let on_clear_keyword_search = {
+            let keyword_search = keyword_search.clone();
+            let keyword_offset = keyword_offset.clone();
+            Callback::from(move |_| {
+                keyword_search.set(String::new());
+                keyword_offset.set(0);
+            })
+        };
+        let offset = *keyword_offset;
+        let on_keywords_prev = {
+            let keyword_offset = keyword_offset.clone();
+            Callback::from(move |_| {
+                keyword_offset.set(offset.saturating_sub(KEYWORDS_PAGE_SIZE));
+            })
+        };
+        let on_keywords_next = {
+            let keyword_offset = keyword_offset.clone();
+            Callback::from(move |_| keyword_offset.set(offset + KEYWORDS_PAGE_SIZE))
+        };
 
         let stats = keywords.stats.clone();
+        let keyword_page_start = if keywords.total == 0 { 0 } else { keywords.offset + 1 };
+        let keyword_page_end = keywords.offset + keywords.keywords.len();
+        let search_active = !keyword_search.trim().is_empty();
         html! {
             <div class={classes!("space-y-4")}>
                 <div class={classes!("grid", "gap-3", "sm:grid-cols-2", "lg:grid-cols-4")}>
@@ -384,10 +430,51 @@ pub fn admin_moderation_page() -> Html {
                 </div>
 
                 <div class={classes!("rounded-xl", "border", "border-[var(--border)]", "bg-[var(--surface)]", "overflow-hidden")}>
+                    <div class={classes!("flex", "flex-wrap", "items-center", "gap-3", "border-b", "border-[var(--border)]", "p-4")}>
+                        <input
+                            type="search"
+                            class={classes!("min-w-[16rem]", "flex-1", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--bg)]", "px-3", "py-2", "font-mono", "text-sm")}
+                            placeholder="Search keyword, category, source, or note"
+                            value={(*keyword_search).clone()}
+                            oninput={on_keyword_search_input}
+                        />
+                        if search_active {
+                            <button
+                                type="button"
+                                class={classes!("btn-terminal", "!px-2.5", "!py-1.5", "!text-xs")}
+                                onclick={on_clear_keyword_search}
+                            >
+                                { "Clear" }
+                            </button>
+                        }
+                        <span class={classes!("text-sm", "text-[var(--muted)]", "whitespace-nowrap")}>
+                            { format!("{keyword_page_start}–{keyword_page_end} of {} keyword(s)", keywords.total) }
+                        </span>
+                        <div class={classes!("ml-auto", "flex", "items-center", "gap-2")}>
+                            <button
+                                type="button"
+                                class={classes!("btn-terminal", "!px-2.5", "!py-1.5", "!text-xs")}
+                                disabled={keywords.offset == 0}
+                                onclick={on_keywords_prev}
+                            >
+                                { "‹ Prev" }
+                            </button>
+                            <button
+                                type="button"
+                                class={classes!("btn-terminal", "!px-2.5", "!py-1.5", "!text-xs")}
+                                disabled={!keywords.has_more}
+                                onclick={on_keywords_next}
+                            >
+                                { "Next ›" }
+                            </button>
+                        </div>
+                    </div>
                     if *keywords_loading {
                         <div class={classes!("p-5", "text-sm", "text-[var(--muted)]")}>{ "Loading keywords…" }</div>
                     } else if keywords.keywords.is_empty() {
-                        <div class={classes!("p-5", "text-sm", "text-[var(--muted)]")}>{ "No keywords configured." }</div>
+                        <div class={classes!("p-5", "text-sm", "text-[var(--muted)]")}>
+                            { if search_active { "No keywords match this search." } else { "No keywords configured." } }
+                        </div>
                     } else {
                         <div class={classes!("overflow-x-auto")}>
                             <table class={classes!("w-full", "min-w-[40rem]", "text-sm")}>
@@ -454,6 +541,7 @@ pub fn admin_moderation_page() -> Html {
         let sessions = sessions.clone();
         let sessions_loading = sessions_loading.clone();
         let session_status = session_status.clone();
+        let session_search = session_search.clone();
         let session_offset = session_offset.clone();
         let selected_detail = selected_detail.clone();
         let detail_loading = detail_loading.clone();
@@ -468,6 +556,24 @@ pub fn admin_moderation_page() -> Html {
                 let target: HtmlSelectElement = e.target_unchecked_into();
                 session_status.set(target.value());
                 // Reset to the first page whenever the filter changes.
+                session_offset.set(0);
+            })
+        };
+
+        let on_session_search_input = {
+            let session_search = session_search.clone();
+            let session_offset = session_offset.clone();
+            Callback::from(move |e: InputEvent| {
+                let target: HtmlInputElement = e.target_unchecked_into();
+                session_search.set(target.value());
+                session_offset.set(0);
+            })
+        };
+        let on_clear_session_search = {
+            let session_search = session_search.clone();
+            let session_offset = session_offset.clone();
+            Callback::from(move |_| {
+                session_search.set(String::new());
                 session_offset.set(0);
             })
         };
@@ -498,6 +604,22 @@ pub fn admin_moderation_page() -> Html {
                         <option value="unbanned" selected={*session_status == "unbanned"}>{ "Unbanned" }</option>
                         <option value="all" selected={*session_status == "all"}>{ "All" }</option>
                     </select>
+                    <input
+                        type="search"
+                        class={classes!("min-w-[18rem]", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--bg)]", "px-3", "py-2", "text-sm")}
+                        placeholder="Search hit_key, session, key, keyword..."
+                        value={(*session_search).clone()}
+                        oninput={on_session_search_input}
+                    />
+                    if !session_search.is_empty() {
+                        <button
+                            type="button"
+                            class={classes!("btn-terminal", "!px-2.5", "!py-1.5", "!text-xs")}
+                            onclick={on_clear_session_search}
+                        >
+                            { "Clear" }
+                        </button>
+                    }
                     <span class={classes!("text-sm", "text-[var(--muted)]")}>
                         { format!("{page_start}–{page_end} of {} record(s)", sessions.total) }
                     </span>
@@ -528,9 +650,10 @@ pub fn admin_moderation_page() -> Html {
                         <div class={classes!("p-5", "text-sm", "text-[var(--muted)]")}>{ "No banned sessions." }</div>
                     } else {
                         <div class={classes!("overflow-x-auto")}>
-                            <table class={classes!("w-full", "min-w-[60rem]", "text-sm")}>
+                            <table class={classes!("w-full", "min-w-[74rem]", "text-sm")}>
                                 <thead>
                                     <tr class={classes!("border-b", "border-[var(--border)]", "text-left", "text-xs", "uppercase", "tracking-wider", "text-[var(--muted)]")}>
+                                        <th scope="col" class={classes!("px-4", "py-2")}>{ "Hit key" }</th>
                                         <th scope="col" class={classes!("px-4", "py-2")}>{ "Provider" }</th>
                                         <th scope="col" class={classes!("px-4", "py-2")}>{ "Key" }</th>
                                         <th scope="col" class={classes!("px-4", "py-2")}>{ "Matched keyword" }</th>
@@ -602,6 +725,7 @@ pub fn admin_moderation_page() -> Html {
 
                                         html! {
                                             <tr class={classes!("border-b", "border-[var(--border)]/50")}>
+                                                <td class={classes!("px-4", "py-2", "font-mono", "text-[10px]", "break-all")}>{ &session.hit_key }</td>
                                                 <td class={classes!("px-4", "py-2")}>
                                                     <span class={provider_badge(&session.provider)}>{ &session.provider }</span>
                                                 </td>
@@ -917,6 +1041,7 @@ fn detail_panel(
                 { detail_field("Endpoint", &session.endpoint) }
                 { detail_field("Model", &session.model) }
                 { detail_field("Client IP", &session.client_ip) }
+                { detail_field("Hit key", &session.hit_key) }
                 { detail_field("Session id", &session.session_id) }
                 { detail_field("Matched keyword", &session.matched_keyword) }
                 { detail_field("Match range", &format!("{}..{}", session.match_start, session.match_end)) }

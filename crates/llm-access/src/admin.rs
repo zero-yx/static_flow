@@ -3085,6 +3085,9 @@ pub(crate) async fn test_admin_anthropic_upstream_model(
 struct AdminModerationKeywordsResponse {
     keywords: Vec<core_store::ModerationKeyword>,
     total: usize,
+    limit: usize,
+    offset: usize,
+    has_more: bool,
     stats: crate::moderation::ModerationGateStats,
     generated_at: i64,
 }
@@ -3104,6 +3107,14 @@ pub(crate) struct AddAdminModerationKeywordsRequest {
     /// codes that already exist in the category taxonomy).
     #[serde(default)]
     categories: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub(crate) struct AdminModerationKeywordsQuery {
+    limit: Option<usize>,
+    offset: Option<usize>,
+    #[serde(alias = "search")]
+    q: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3256,6 +3267,8 @@ pub(crate) struct AdminModerationBannedSessionsQuery {
     limit: Option<usize>,
     offset: Option<usize>,
     status: Option<String>,
+    #[serde(alias = "search")]
+    q: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3269,9 +3282,46 @@ pub(crate) struct ReviewAdminModerationBannedSessionRequest {
 pub(crate) async fn list_admin_moderation_keywords(
     State(state): State<HttpState>,
     headers: HeaderMap,
+    Query(query): Query<AdminModerationKeywordsQuery>,
 ) -> Response {
     if let Err(response) = ensure_admin_access(&headers) {
         return response.into_response();
+    }
+    let search = query
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let page_requested = query.limit.is_some() || query.offset.is_some() || search.is_some();
+    if page_requested {
+        let page_request = core_store::AdminPageRequest {
+            limit: query
+                .limit
+                .unwrap_or(DEFAULT_ADMIN_LIST_LIMIT)
+                .clamp(1, MAX_ADMIN_LIST_LIMIT),
+            offset: query.offset.unwrap_or(0),
+        };
+        let keyword_query = core_store::AdminModerationKeywordPageQuery {
+            search,
+        };
+        return match state
+            .admin_moderation_store
+            .list_moderation_keywords_page(page_request, &keyword_query)
+            .await
+        {
+            Ok(page) => Json(AdminModerationKeywordsResponse {
+                total: page.total,
+                limit: page.limit,
+                offset: page.offset,
+                has_more: page.has_more,
+                keywords: page.keywords,
+                stats: state.moderation_gate.stats(),
+                generated_at: now_ms(),
+            })
+            .into_response(),
+            Err(_) => internal_error("Failed to list moderation keywords").into_response(),
+        };
     }
     match state
         .admin_moderation_store
@@ -3280,6 +3330,9 @@ pub(crate) async fn list_admin_moderation_keywords(
     {
         Ok(keywords) => Json(AdminModerationKeywordsResponse {
             total: keywords.len(),
+            limit: keywords.len(),
+            offset: 0,
+            has_more: false,
             keywords,
             stats: state.moderation_gate.stats(),
             generated_at: now_ms(),
@@ -3453,9 +3506,13 @@ pub(crate) async fn list_admin_moderation_banned_sessions(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty() && *value != "all");
+    let store_query = core_store::AdminModerationBannedSessionPageQuery {
+        status: status.map(str::to_string),
+        search: query.q.clone(),
+    };
     match state
         .admin_moderation_store
-        .list_moderation_banned_sessions(page_request, status)
+        .list_moderation_banned_sessions(page_request, &store_query)
         .await
     {
         Ok(page) => Json(AdminModerationBannedSessionsResponse {

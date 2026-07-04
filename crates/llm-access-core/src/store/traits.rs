@@ -34,10 +34,11 @@ use super::{
         NewAdminKiroAccount,
     },
     moderation::{
+        AdminModerationBannedSessionPageQuery, AdminModerationKeywordPageQuery,
         ModerationBannedSession, ModerationBannedSessionDetail, ModerationBannedSessionsPage,
         ModerationCategory, ModerationKeyword, ModerationKeywordImportOutcome,
-        ModerationRuntimeSnapshot, NewModerationBannedSession, NewModerationCategory,
-        NewModerationKeyword,
+        ModerationKeywordsPage, ModerationRuntimeSnapshot, NewModerationBannedSession,
+        NewModerationCategory, NewModerationKeyword,
     },
     proxy::{
         AdminProxyBinding, AdminProxyConfig, AdminProxyConfigPatch, AdminProxyEndpointCheckUpdate,
@@ -311,8 +312,16 @@ pub trait AdminModerationStore: Send + Sync {
         code: &str,
     ) -> anyhow::Result<Option<ModerationCategory>>;
 
-    /// List all configured moderation keywords with their categories.
+    /// List all configured moderation keywords with their categories for
+    /// runtime snapshots.
     async fn list_moderation_keywords(&self) -> anyhow::Result<Vec<ModerationKeyword>>;
+
+    /// List a page of configured moderation keywords for the admin console.
+    async fn list_moderation_keywords_page(
+        &self,
+        page: AdminPageRequest,
+        query: &AdminModerationKeywordPageQuery,
+    ) -> anyhow::Result<ModerationKeywordsPage>;
 
     /// Insert keywords in bulk, skipping ones that already exist.
     async fn add_moderation_keywords(
@@ -331,11 +340,11 @@ pub trait AdminModerationStore: Send + Sync {
         record: NewModerationBannedSession,
     ) -> anyhow::Result<bool>;
 
-    /// List one page of banned sessions, optionally filtered by status.
+    /// List one page of banned sessions for the admin console.
     async fn list_moderation_banned_sessions(
         &self,
         page: AdminPageRequest,
-        status: Option<&str>,
+        query: &AdminModerationBannedSessionPageQuery,
     ) -> anyhow::Result<ModerationBannedSessionsPage>;
 
     /// Load one banned session including the captured request payload.

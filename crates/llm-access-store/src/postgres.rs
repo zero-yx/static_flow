@@ -785,13 +785,15 @@ mod tests {
             AdminAnthropicUpstreamModelsStatusUpdate, AdminAnthropicUpstreamStore,
             AdminAnthropicUpstreamTestStatusUpdate, AdminCodexAccountPageQuery,
             AdminCodexAccountSortMode, AdminCodexAccountStore, AdminConfigStore, AdminKeyStore,
-            AdminKiroAccountStore, AdminModerationStore, AdminPageRequest, AdminProxyConfigPatch,
-            AdminProxyStore, AdminProxyTrafficSnapshot, AdminReviewQueueStore,
-            AnthropicUpstreamChannelUsageDelta, ControlStore, KeyUsageRollupDelta,
-            NewAdminAnthropicUpstreamChannel, NewAdminProxyConfig, NewModerationBannedSession,
-            NewModerationCategory, NewModerationKeyword, NewPublicAccountContributionRequest,
-            ProviderRouteStore, ProxyTrafficTotals, PublicSubmissionStore, PublicUsageStore,
-            UsageEventSink, UsageRollupBatch, UsageRollupBatchSink,
+            AdminKiroAccountStore, AdminModerationBannedSessionPageQuery,
+            AdminModerationKeywordPageQuery, AdminModerationStore, AdminPageRequest,
+            AdminProxyConfigPatch, AdminProxyStore, AdminProxyTrafficSnapshot,
+            AdminReviewQueueStore, AnthropicUpstreamChannelUsageDelta, ControlStore,
+            KeyUsageRollupDelta, NewAdminAnthropicUpstreamChannel, NewAdminProxyConfig,
+            NewModerationBannedSession, NewModerationCategory, NewModerationKeyword,
+            NewPublicAccountContributionRequest, ProviderRouteStore, ProxyTrafficTotals,
+            PublicSubmissionStore, PublicUsageStore, UsageEventSink, UsageRollupBatch,
+            UsageRollupBatchSink,
         },
     };
     use serde::Serialize;
@@ -2104,6 +2106,35 @@ mod tests {
         assert_eq!(free.note, None);
         assert!(free.categories.is_empty());
 
+        let page = repo
+            .list_moderation_keywords_page(
+                AdminPageRequest {
+                    limit: 1,
+                    offset: 0,
+                },
+                &AdminModerationKeywordPageQuery::default(),
+            )
+            .await
+            .expect("list first keyword page");
+        assert_eq!(page.total, 2);
+        assert_eq!(page.keywords.len(), 1);
+        assert!(page.has_more);
+
+        let searched = repo
+            .list_moderation_keywords_page(
+                AdminPageRequest {
+                    limit: 10,
+                    offset: 0,
+                },
+                &AdminModerationKeywordPageQuery {
+                    search: Some("freephrase".to_string()),
+                },
+            )
+            .await
+            .expect("search compact keyword");
+        assert_eq!(searched.total, 1);
+        assert_eq!(searched.keywords[0].keyword, "free phrase");
+
         // A referenced category cannot be deleted; an unreferenced one can.
         assert!(repo.delete_moderation_category("weapons").await.is_err());
         assert_eq!(
@@ -2187,12 +2218,31 @@ mod tests {
                     limit: 10,
                     offset: 0,
                 },
-                Some("banned"),
+                &AdminModerationBannedSessionPageQuery {
+                    status: Some("banned".to_string()),
+                    search: None,
+                },
             )
             .await
             .expect("list banned sessions");
         assert_eq!(banned.total, 2);
         assert_eq!(banned.sessions.len(), 2);
+
+        let hit_search = repo
+            .list_moderation_banned_sessions(
+                AdminPageRequest {
+                    limit: 10,
+                    offset: 0,
+                },
+                &AdminModerationBannedSessionPageQuery {
+                    status: Some("all".to_string()),
+                    search: Some("hit-1".to_string()),
+                },
+            )
+            .await
+            .expect("search banned sessions by hit key");
+        assert_eq!(hit_search.total, 1);
+        assert_eq!(hit_search.sessions[0].hit_key, "hit-1");
 
         let target = banned
             .sessions
@@ -2229,7 +2279,10 @@ mod tests {
                     limit: 10,
                     offset: 0,
                 },
-                Some("banned"),
+                &AdminModerationBannedSessionPageQuery {
+                    status: Some("banned".to_string()),
+                    search: None,
+                },
             )
             .await
             .expect("list still-banned sessions");
@@ -2240,7 +2293,10 @@ mod tests {
                     limit: 10,
                     offset: 0,
                 },
-                Some("unbanned"),
+                &AdminModerationBannedSessionPageQuery {
+                    status: Some("unbanned".to_string()),
+                    search: None,
+                },
             )
             .await
             .expect("list unbanned sessions");
@@ -2269,11 +2325,15 @@ mod tests {
             .await
             .expect("load moderation runtime snapshot");
         assert_eq!(snapshot.keywords.len(), 1);
-        let mut banned_session_keys = snapshot.banned_session_keys;
-        banned_session_keys.sort();
-        assert_eq!(banned_session_keys, vec![
-            "codex:key-1:sess-2".to_string(),
-            "kiro:key-1:sess-1".to_string(),
+        let mut banned_sessions = snapshot
+            .banned_sessions
+            .into_iter()
+            .map(|ban| (ban.session_key, ban.hit_key))
+            .collect::<Vec<_>>();
+        banned_sessions.sort();
+        assert_eq!(banned_sessions, vec![
+            ("codex:key-1:sess-2".to_string(), "hit-2".to_string()),
+            ("kiro:key-1:sess-1".to_string(), "hit-3".to_string()),
         ]);
         assert_eq!(snapshot.suppressed_hits.len(), 1);
         assert_eq!(snapshot.suppressed_hits[0].hit_key, "hit-1");

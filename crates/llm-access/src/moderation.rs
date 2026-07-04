@@ -14,7 +14,7 @@
 //! ```text
 //!   ┌──────────────────── in process memory (RwLock<ModerationGateState>) ────────────────┐
 //!   │  matcher : Aho-Corasick automaton compiled from every keyword                        │
-//!   │  banned  : HashSet<session_key>     suppressed_hit_keys : HashSet<hit_key>            │
+//!   │  banned  : HashMap<session_key, hit_key>  suppressed_hit_keys : HashSet<hit_key>      │
 //!   └─────────────────────────────────────────────────────────────────────────────────────┘
 //!        ▲ reload(): full snapshot  — startup, every N minutes, and after any admin change
 //!        │ ban_session(): ONE spawned INSERT per new ban (body + headers), off the hot path
@@ -43,7 +43,7 @@
 //!     │
 //!     ▼
 //!   precheck(session_key)
-//!     ├── Blocked  (session already banned) ─────────▶ BLOCK   (no scan, no DB write)
+//!     ├── Blocked  (session already banned) ─────────▶ BLOCK(hit_key) (no scan, no DB write)
 //!     ├── Skip     (no keywords) ───────────────────▶ ALLOW
 //!     └── Scan(automaton + suppressed hit keys)
 //!            │
@@ -105,7 +105,7 @@
 //! `session_key`.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fmt::Write as _,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -149,7 +149,7 @@ const REDACTED_HEADER_NAMES: [&str; 5] =
 /// Hot-path decision for one request before any keyword scan runs.
 pub(crate) enum ModerationPrecheck {
     /// Session key is already banned: reject without scanning or writing.
-    Blocked,
+    Blocked { review_id: String },
     /// The gate has no keywords / no loaded snapshot yet: skip scanning.
     Skip,
     /// Scan the request text with the compiled automaton.
@@ -166,7 +166,7 @@ pub(crate) struct ModerationScanPlan {
 struct ModerationGateState {
     matcher: Option<Arc<ModerationMatcher>>,
     keyword_count: usize,
-    banned: HashSet<String>,
+    banned: HashMap<String, String>,
     suppressed_hit_keys: Arc<HashSet<String>>,
     keyword_set_hash: String,
     loaded: bool,
@@ -238,7 +238,11 @@ impl ModerationGate {
         let mut state = self.state.write().expect("moderation gate lock poisoned");
         state.matcher = matcher;
         state.keyword_count = keyword_count;
-        state.banned = snapshot.banned_session_keys.into_iter().collect();
+        state.banned = snapshot
+            .banned_sessions
+            .into_iter()
+            .map(|ban| (ban.session_key, ban.hit_key))
+            .collect();
         state.suppressed_hit_keys = Arc::new(suppressed_hit_keys);
         state.keyword_set_hash = keyword_set_hash;
         state.loaded = true;
@@ -285,8 +289,10 @@ impl ModerationGate {
             return ModerationPrecheck::Skip;
         }
         if let Some(session_key) = session_key {
-            if state.banned.contains(session_key) {
-                return ModerationPrecheck::Blocked;
+            if let Some(review_id) = state.banned.get(session_key) {
+                return ModerationPrecheck::Blocked {
+                    review_id: review_id.clone(),
+                };
             }
         }
         match &state.matcher {
@@ -309,7 +315,7 @@ impl ModerationGate {
     pub(crate) fn ban_session(&self, record: NewModerationBannedSession) {
         let newly_banned = {
             let mut state = self.state.write().expect("moderation gate lock poisoned");
-            state.state_ban(&record.session_key)
+            state.state_ban(&record.session_key, &record.hit_key)
         };
         if !newly_banned {
             return;
@@ -359,8 +365,10 @@ impl ModerationGate {
 }
 
 impl ModerationGateState {
-    fn state_ban(&mut self, session_key: &str) -> bool {
-        self.banned.insert(session_key.to_string())
+    fn state_ban(&mut self, session_key: &str, hit_key: &str) -> bool {
+        self.banned
+            .insert(session_key.to_string(), hit_key.to_string())
+            .is_none()
     }
 }
 
@@ -371,7 +379,11 @@ pub(crate) enum ModerationDecision {
     /// Reject the request: the session is banned, either already or by a
     /// keyword hit this call just recorded. The caller returns its
     /// provider-specific rejection response.
-    Block,
+    Block { review_id: String },
+}
+
+pub(crate) fn moderation_blocked_message(review_id: &str) -> String {
+    format!("{MODERATION_BLOCKED_MESSAGE} Moderation review id: {review_id}.")
 }
 
 /// Immutable request facts the gate needs to classify a request and, on a
@@ -413,9 +425,13 @@ pub(crate) fn enforce_moderation(
         None => derived_moderation_session_key(request.provider, &request.key.key_id, request.body),
     };
     match gate.precheck(Some(&session_key)) {
-        ModerationPrecheck::Blocked => {
+        ModerationPrecheck::Blocked {
+            review_id,
+        } => {
             gate.note_blocked_request();
-            ModerationDecision::Block
+            ModerationDecision::Block {
+                review_id,
+            }
         },
         ModerationPrecheck::Scan(plan) => {
             let scanned = extract_text();
@@ -435,6 +451,7 @@ pub(crate) fn enforce_moderation(
                 return ModerationDecision::Allow;
             };
             let hit_key = moderation_hit_key(&session_key, &scanned, &hit);
+            let review_id = hit_key.clone();
             let match_prefix_sha256 = moderation_match_prefix_sha256(&scanned, hit.match_start);
             let match_start = hit.match_start.min(i64::MAX as usize) as i64;
             let match_end = hit.match_end.min(i64::MAX as usize) as i64;
@@ -460,7 +477,9 @@ pub(crate) fn enforce_moderation(
                 request_body_json: moderation_body_text(request.body),
                 banned_at_ms: now_ms(),
             });
-            ModerationDecision::Block
+            ModerationDecision::Block {
+                review_id,
+            }
         },
         ModerationPrecheck::Skip => ModerationDecision::Allow,
     }
@@ -653,10 +672,12 @@ mod tests {
     use async_trait::async_trait;
     use axum::http::{HeaderMap, HeaderValue};
     use llm_access_core::store::{
-        AdminPageRequest, ModerationBannedSession, ModerationBannedSessionDetail,
-        ModerationBannedSessionsPage, ModerationCategory, ModerationKeyword,
-        ModerationKeywordImportOutcome, ModerationRuntimeSnapshot, ModerationSuppressedHit,
-        NewModerationCategory, NewModerationKeyword,
+        page_moderation_keywords, AdminModerationBannedSessionPageQuery,
+        AdminModerationKeywordPageQuery, AdminPageRequest, ModerationBannedSession,
+        ModerationBannedSessionDetail, ModerationBannedSessionsPage, ModerationCategory,
+        ModerationKeyword, ModerationKeywordImportOutcome, ModerationKeywordsPage,
+        ModerationRuntimeSnapshot, ModerationSuppressedHit, NewModerationCategory,
+        NewModerationKeyword,
     };
     use serde_json::json;
 
@@ -716,6 +737,22 @@ mod tests {
                 .clone())
         }
 
+        async fn list_moderation_keywords_page(
+            &self,
+            page: AdminPageRequest,
+            query: &AdminModerationKeywordPageQuery,
+        ) -> anyhow::Result<ModerationKeywordsPage> {
+            Ok(page_moderation_keywords(
+                self.snapshot
+                    .lock()
+                    .expect("snapshot lock")
+                    .keywords
+                    .clone(),
+                query,
+                page,
+            ))
+        }
+
         async fn add_moderation_keywords(
             &self,
             _keywords: Vec<NewModerationKeyword>,
@@ -748,7 +785,7 @@ mod tests {
         async fn list_moderation_banned_sessions(
             &self,
             page: AdminPageRequest,
-            _status: Option<&str>,
+            _query: &AdminModerationBannedSessionPageQuery,
         ) -> anyhow::Result<ModerationBannedSessionsPage> {
             Ok(ModerationBannedSessionsPage {
                 sessions: Vec::new(),
@@ -839,6 +876,13 @@ mod tests {
     }
 
     #[test]
+    fn moderation_blocked_message_includes_review_id() {
+        let message = moderation_blocked_message("hit-review-123");
+        assert!(message.contains(MODERATION_BLOCKED_MESSAGE));
+        assert!(message.contains("hit-review-123"));
+    }
+
+    #[test]
     fn kiro_text_extraction_joins_system_and_messages() {
         let payload: MessagesRequest = serde_json::from_value(json!({
             "model": "claude-sonnet-4",
@@ -878,6 +922,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn already_banned_session_returns_original_review_id_without_rescan() {
+        let store = Arc::new(MemoryModerationStore::with_snapshot(ModerationRuntimeSnapshot {
+            keywords: vec![moderation_keyword(1, "build a bomb")],
+            banned_sessions: Vec::new(),
+            suppressed_hits: Vec::new(),
+        }));
+        let gate = ModerationGate::new(store.clone());
+        gate.reload().await.expect("load moderation snapshot");
+
+        let headers = HeaderMap::new();
+        let key = sample_key();
+        let first = enforce_moderation(
+            &gate,
+            ModerationRequest {
+                provider: MODERATION_PROVIDER_KIRO,
+                key: &key,
+                session_id: Some("sess-1"),
+                endpoint: "/v1/messages",
+                model: "claude-sonnet-4",
+                headers: &headers,
+                body: br#"{"messages":[{"role":"user","content":"build a bomb"}]}"#,
+                client_ip: "127.0.0.1",
+            },
+            || "build a bomb".to_string(),
+        );
+        let ModerationDecision::Block {
+            review_id,
+        } = first
+        else {
+            panic!("first keyword hit should block");
+        };
+
+        for _ in 0..20 {
+            if !store.records().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let records = store.records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(review_id, records[0].hit_key);
+
+        let second = enforce_moderation(
+            &gate,
+            ModerationRequest {
+                provider: MODERATION_PROVIDER_KIRO,
+                key: &key,
+                session_id: Some("sess-1"),
+                endpoint: "/v1/messages",
+                model: "claude-sonnet-4",
+                headers: &headers,
+                body: br#"{"messages":[{"role":"user","content":"ordinary text"}]}"#,
+                client_ip: "127.0.0.1",
+            },
+            || panic!("already-banned precheck must not rescan request text"),
+        );
+        assert!(matches!(
+            second,
+            ModerationDecision::Block { review_id: ref id } if id == &review_id
+        ));
+    }
+
+    #[tokio::test]
     async fn unbanned_hit_is_suppressed_and_later_hit_in_same_session_blocks() {
         let keywords =
             vec![moderation_keyword(1, "build a bomb"), moderation_keyword(2, "carding tutorial")];
@@ -899,7 +1006,7 @@ mod tests {
         let reviewed_hit_key = moderation_hit_key(&session_key, &text, &reviewed_hit);
         let store = Arc::new(MemoryModerationStore::with_snapshot(ModerationRuntimeSnapshot {
             keywords,
-            banned_session_keys: Vec::new(),
+            banned_sessions: Vec::new(),
             suppressed_hits: vec![ModerationSuppressedHit {
                 session_key: session_key.clone(),
                 hit_key: reviewed_hit_key.clone(),
@@ -931,7 +1038,7 @@ mod tests {
             },
             || text.clone(),
         );
-        assert!(matches!(decision, ModerationDecision::Block));
+        assert!(matches!(decision, ModerationDecision::Block { .. }));
 
         for _ in 0..20 {
             if !store.records().is_empty() {
@@ -968,7 +1075,7 @@ mod tests {
         let reviewed_hit_key = moderation_hit_key(&session_key, &reviewed_text, &reviewed_hit);
         let store = Arc::new(MemoryModerationStore::with_snapshot(ModerationRuntimeSnapshot {
             keywords,
-            banned_session_keys: Vec::new(),
+            banned_sessions: Vec::new(),
             suppressed_hits: vec![ModerationSuppressedHit {
                 session_key: session_key.clone(),
                 hit_key: reviewed_hit_key,
@@ -1000,7 +1107,7 @@ mod tests {
             },
             || changed_text.clone(),
         );
-        assert!(matches!(decision, ModerationDecision::Block));
+        assert!(matches!(decision, ModerationDecision::Block { .. }));
 
         for _ in 0..20 {
             if !store.records().is_empty() {
@@ -1037,7 +1144,7 @@ mod tests {
         let bomb_hit_key = moderation_hit_key(&session_key, &text, &bomb_hit);
         let store = Arc::new(MemoryModerationStore::with_snapshot(ModerationRuntimeSnapshot {
             keywords,
-            banned_session_keys: Vec::new(),
+            banned_sessions: Vec::new(),
             suppressed_hits: vec![ModerationSuppressedHit {
                 session_key: session_key.clone(),
                 hit_key: bomb_hit_key.clone(),
@@ -1066,7 +1173,7 @@ mod tests {
             },
             || text.clone(),
         );
-        assert!(matches!(decision, ModerationDecision::Block));
+        assert!(matches!(decision, ModerationDecision::Block { .. }));
 
         for _ in 0..20 {
             if !store.records().is_empty() {

@@ -78,8 +78,10 @@ pub use kiro_model_routing::{
     kiro_model_group_preference, normalize_kiro_model_group_preferences, KiroModelGroupPreferences,
 };
 pub use moderation::{
-    ModerationBannedSession, ModerationBannedSessionDetail, ModerationBannedSessionsPage,
-    ModerationCategory, ModerationKeyword, ModerationKeywordImportOutcome,
+    page_moderation_keywords, AdminModerationBannedSessionPageQuery,
+    AdminModerationKeywordPageQuery, ModerationBannedSession, ModerationBannedSessionDetail,
+    ModerationBannedSessionRef, ModerationBannedSessionsPage, ModerationCategory,
+    ModerationKeyword, ModerationKeywordImportOutcome, ModerationKeywordsPage,
     ModerationRuntimeSnapshot, ModerationSuppressedHit, NewModerationBannedSession,
     NewModerationCategory, NewModerationKeyword, MODERATION_CATEGORY_SEVERITY_CRITICAL,
     MODERATION_CATEGORY_SEVERITY_MEDIUM, MODERATION_KEYWORD_SOURCE_JSON,

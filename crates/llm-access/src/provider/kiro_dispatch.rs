@@ -85,8 +85,8 @@ use super::{
 use crate::{
     kiro_refresh,
     moderation::{
-        enforce_moderation, moderation_text_for_kiro, ModerationDecision, ModerationRequest,
-        MODERATION_BLOCKED_MESSAGE, MODERATION_PROVIDER_KIRO,
+        enforce_moderation, moderation_blocked_message, moderation_text_for_kiro,
+        ModerationDecision, ModerationRequest, MODERATION_PROVIDER_KIRO,
     },
 };
 
@@ -328,7 +328,9 @@ pub async fn dispatch_kiro_proxy(
     // capture and ban the session) before any upstream work. The gate is
     // dormant-cheap and reads only in-memory state; see `crate::moderation` for
     // the full decision flow.
-    if let ModerationDecision::Block = enforce_moderation(
+    if let ModerationDecision::Block {
+        review_id,
+    } = enforce_moderation(
         &moderation_gate,
         ModerationRequest {
             provider: MODERATION_PROVIDER_KIRO,
@@ -342,11 +344,8 @@ pub async fn dispatch_kiro_proxy(
         },
         || moderation_text_for_kiro(&payload),
     ) {
-        return kiro_json_error(
-            StatusCode::FORBIDDEN,
-            "permission_error",
-            MODERATION_BLOCKED_MESSAGE,
-        );
+        let message = moderation_blocked_message(&review_id);
+        return kiro_json_error(StatusCode::FORBIDDEN, "permission_error", &message);
     }
     if routes[0].remote_media_resolution_enabled {
         if let Err(err) = resolve_kiro_remote_media_sources(&mut payload).await {
