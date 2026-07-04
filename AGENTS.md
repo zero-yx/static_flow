@@ -77,6 +77,12 @@ existing binary, then use the rebuilt `target/release` or `target/debug`
 artifact. Do not prefer legacy `./bin/sf-cli` snapshots for
 storage-format-sensitive writes.
 
+## Communication Preference
+Spend time thinking through the task before acting. Do not send optional
+commentary or routine progress/status updates unless they unblock the work,
+report a real blocker, or the user explicitly asks for status; preserve
+reasoning continuity over conversational progress reports.
+
 ## Repo-Local Instruction Precedence (Hard Rule)
 - When a generic/global agent habit conflicts with a narrower rule in this
   repo, obey the narrower repo-local rule here.
