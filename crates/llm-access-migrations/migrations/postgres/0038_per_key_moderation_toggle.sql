@@ -1,0 +1,2 @@
+ALTER TABLE IF EXISTS llm_key_route_config
+    ADD COLUMN IF NOT EXISTS moderation_enabled BOOLEAN NOT NULL DEFAULT TRUE;

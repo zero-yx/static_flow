@@ -18,6 +18,7 @@ fn route(account_name: &str, key_enabled: bool, account_enabled: bool) -> Provid
         auth_json: r#"{"access_token":"token"}"#.to_string(),
         map_gpt53_codex_to_spark: false,
         auth_refresh_enabled: true,
+        moderation_enabled: true,
         codex_fast_enabled: true,
         codex_strict_session_rejection_enabled: false,
         codex_image_generation_enabled: key_enabled,

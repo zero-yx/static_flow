@@ -49,8 +49,8 @@ use super::{
     ProviderDispatchDeps, ProviderUsageMetadata, MAX_PROVIDER_PROXY_BODY_BYTES,
 };
 use crate::moderation::{
-    enforce_moderation, moderation_blocked_message, moderation_text_for_kiro, ModerationDecision,
-    ModerationRequest, MODERATION_PROVIDER_KIRO,
+    enforce_key_moderation, moderation_blocked_message, moderation_text_for_kiro,
+    ModerationDecision, ModerationRequest, MODERATION_PROVIDER_KIRO,
 };
 
 static DIRECT_ANTHROPIC_SCHEDULER: LazyLock<Mutex<SmoothWeightedRoundRobin>> =
@@ -215,12 +215,15 @@ pub(super) async fn maybe_dispatch_anthropic_upstream_pool(
         preflight,
     } = prepared;
     if let Some(response) = enforce_direct_anthropic_moderation(
-        &key,
-        public_path,
-        &original_model,
-        &replay.headers,
-        &replay.body,
-        &preflight.request,
+        DirectAnthropicModerationInput {
+            moderation_enabled: routes[0].moderation_enabled,
+            key: &key,
+            endpoint: public_path,
+            model: &original_model,
+            request_headers: &replay.headers,
+            body: &replay.body,
+            payload: &preflight.request,
+        },
         &deps,
     ) {
         return AnthropicUpstreamDispatchOutcome::Handled(response);
@@ -280,34 +283,44 @@ pub(super) async fn maybe_dispatch_anthropic_upstream_pool(
 ///
 /// The Anthropic-upstream pool short-circuits `dispatch_kiro_proxy` before its
 /// own moderation check runs, so this path re-applies the same gate through the
-/// shared [`enforce_moderation`] flow (see `crate::moderation`). Returns a
+/// shared [`enforce_key_moderation`] flow (see `crate::moderation`). Returns a
 /// rejection response when the session is banned or a keyword fires, else
 /// `None` to continue to upstream dispatch.
+struct DirectAnthropicModerationInput<'a> {
+    moderation_enabled: bool,
+    key: &'a AuthenticatedKey,
+    endpoint: &'a str,
+    model: &'a str,
+    request_headers: &'a HeaderMap,
+    body: &'a Bytes,
+    payload: &'a llm_access_kiro::anthropic::types::MessagesRequest,
+}
+
 fn enforce_direct_anthropic_moderation(
-    key: &AuthenticatedKey,
-    endpoint: &str,
-    model: &str,
-    request_headers: &HeaderMap,
-    body: &Bytes,
-    payload: &llm_access_kiro::anthropic::types::MessagesRequest,
+    input: DirectAnthropicModerationInput<'_>,
     deps: &ProviderDispatchDeps,
 ) -> Option<axum::response::Response> {
-    let resolved_session = resolve_kiro_request_session(request_headers, payload.metadata.as_ref());
+    let resolved_session =
+        resolve_kiro_request_session(input.request_headers, input.payload.metadata.as_ref());
     let affinity_session_id = kiro_affinity_session_id(&resolved_session);
-    let client_ip = extract_client_ip_from_headers(request_headers);
-    match enforce_moderation(
+    let client_ip = extract_client_ip_from_headers(input.request_headers);
+    // Route-selected flow:
+    //   authenticated key -> direct Anthropic Kiro route -> per-key switch
+    //                                                   \-> global gate
+    match enforce_key_moderation(
+        input.moderation_enabled,
         &deps.moderation_gate,
         ModerationRequest {
             provider: MODERATION_PROVIDER_KIRO,
-            key,
+            key: input.key,
             session_id: affinity_session_id,
-            endpoint,
-            model,
-            headers: request_headers,
-            body,
+            endpoint: input.endpoint,
+            model: input.model,
+            headers: input.request_headers,
+            body: input.body,
             client_ip: &client_ip,
         },
-        || moderation_text_for_kiro(payload),
+        || moderation_text_for_kiro(input.payload),
     ) {
         ModerationDecision::Block {
             review_id,

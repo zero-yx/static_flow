@@ -442,6 +442,7 @@ impl PostgresControlRepository {
                 .route
                 .request_min_start_interval_ms
                 .and_then(non_negative_i64_to_u64),
+            moderation_enabled: bundle.route.moderation_enabled,
             codex_fast_enabled: bundle.route.codex_fast_enabled,
             codex_strict_session_rejection_enabled: bundle
                 .route
@@ -518,6 +519,7 @@ impl PostgresControlRepository {
                 .route
                 .request_min_start_interval_ms
                 .and_then(non_negative_i64_to_u64),
+            moderation_enabled: bundle.route.moderation_enabled,
             request_validation_enabled: bundle.route.kiro_request_validation_enabled,
             cache_estimation_enabled: bundle.route.kiro_cache_estimation_enabled,
             zero_cache_debug_enabled: bundle.route.kiro_zero_cache_debug_enabled,

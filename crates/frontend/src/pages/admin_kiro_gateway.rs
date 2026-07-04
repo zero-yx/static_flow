@@ -1816,6 +1816,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         use_state(|| props.key_item.kiro_anthropic_upstream_pool_mode.clone());
     let model_name_map = use_state(|| props.key_item.model_name_map.clone().unwrap_or_default());
     let model_group_preferences = use_state(|| props.key_item.kiro_model_group_preferences.clone());
+    let moderation_enabled = use_state(|| props.key_item.moderation_enabled);
     let kiro_request_validation_enabled =
         use_state(|| props.key_item.kiro_request_validation_enabled);
     let kiro_cache_estimation_enabled = use_state(|| props.key_item.kiro_cache_estimation_enabled);
@@ -1858,6 +1859,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let anthropic_upstream_pool_mode = anthropic_upstream_pool_mode.clone();
         let model_name_map = model_name_map.clone();
         let model_group_preferences = model_group_preferences.clone();
+        let moderation_enabled = moderation_enabled.clone();
         let kiro_request_validation_enabled = kiro_request_validation_enabled.clone();
         let kiro_cache_estimation_enabled = kiro_cache_estimation_enabled.clone();
         let kiro_zero_cache_debug_enabled = kiro_zero_cache_debug_enabled.clone();
@@ -1897,6 +1899,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             anthropic_upstream_pool_mode.set(key_item.kiro_anthropic_upstream_pool_mode.clone());
             model_name_map.set(key_item.model_name_map.clone().unwrap_or_default());
             model_group_preferences.set(key_item.kiro_model_group_preferences.clone());
+            moderation_enabled.set(key_item.moderation_enabled);
             kiro_request_validation_enabled.set(key_item.kiro_request_validation_enabled);
             kiro_cache_estimation_enabled.set(key_item.kiro_cache_estimation_enabled);
             kiro_zero_cache_debug_enabled.set(key_item.kiro_zero_cache_debug_enabled);
@@ -1941,6 +1944,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
         let anthropic_upstream_pool_mode = anthropic_upstream_pool_mode.clone();
         let model_name_map = model_name_map.clone();
         let model_group_preferences = model_group_preferences.clone();
+        let moderation_enabled = moderation_enabled.clone();
         let kiro_request_validation_enabled = kiro_request_validation_enabled.clone();
         let kiro_cache_estimation_enabled = kiro_cache_estimation_enabled.clone();
         let kiro_zero_cache_debug_enabled = kiro_zero_cache_debug_enabled.clone();
@@ -1976,6 +1980,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
             let anthropic_upstream_pool_mode_value = (*anthropic_upstream_pool_mode).clone();
             let model_name_map_value = (*model_name_map).clone();
             let model_group_preferences_value = (*model_group_preferences).clone();
+            let moderation_enabled_value = *moderation_enabled;
             let kiro_request_validation_enabled_value = *kiro_request_validation_enabled;
             let kiro_cache_estimation_enabled_value = *kiro_cache_estimation_enabled;
             let kiro_zero_cache_debug_enabled_value = *kiro_zero_cache_debug_enabled;
@@ -2059,6 +2064,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     kiro_model_group_preferences: Some(&model_group_preferences_value),
                     request_max_concurrency: None,
                     request_min_start_interval_ms: None,
+                    moderation_enabled: Some(moderation_enabled_value),
                     codex_fast_enabled: None,
                     codex_strict_session_rejection_enabled: None,
                     codex_image_generation_enabled: None,
@@ -2177,6 +2183,7 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                     kiro_model_group_preferences: Some(&model_group_preferences_value),
                     request_max_concurrency: None,
                     request_min_start_interval_ms: None,
+                    moderation_enabled: None,
                     codex_fast_enabled: None,
                     codex_strict_session_rejection_enabled: None,
                     codex_image_generation_enabled: None,
@@ -2590,6 +2597,31 @@ fn kiro_key_editor_card(props: &KiroKeyEditorCardProps) -> Html {
                         <option value="active">{ "active" }</option>
                         <option value="disabled">{ "disabled" }</option>
                     </select>
+                </label>
+                <label class={classes!("md:col-span-2", "flex", "cursor-pointer", "items-start", "gap-3", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3", "text-sm")}>
+                    <input
+                        type="checkbox"
+                        checked={*moderation_enabled}
+                        onchange={{
+                            let moderation_enabled = moderation_enabled.clone();
+                            Callback::from(move |event: Event| {
+                                let input: HtmlInputElement = event.target_unchecked_into();
+                                moderation_enabled.set(input.checked());
+                            })
+                        }}
+                    />
+                    <span>
+                        <strong>{ "审核拦截" }</strong>
+                        <span class={classes!("block", "mt-1", "text-xs", "text-[var(--muted)]")}>
+                            {
+                                if *moderation_enabled {
+                                    "ON · 命中关键词会封禁该 key 的当前 session，并返回可定位的 review id；解封后同 session 的同一匹配内容不会再次封禁。"
+                                } else {
+                                    "OFF · 仅此 key 跳过审核拦截；历史记录保留，重新开启后已有 active ban 继续生效。"
+                                }
+                            }
+                        </span>
+                    </span>
                 </label>
                 <label class={classes!("md:col-span-2", "flex", "cursor-pointer", "items-start", "gap-3", "rounded-lg", "border", "border-[var(--border)]", "bg-[var(--surface-alt)]", "px-3", "py-3", "text-sm")}>
                     <input

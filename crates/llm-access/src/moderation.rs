@@ -14,7 +14,8 @@
 //! ```text
 //!   ┌──────────────────── in process memory (RwLock<ModerationGateState>) ────────────────┐
 //!   │  matcher : Aho-Corasick automaton compiled from every keyword                        │
-//!   │  banned  : HashMap<session_key, hit_key>  suppressed_hit_keys : HashSet<hit_key>      │
+//!   │  banned  : HashMap<session_key, hit_key>                                             │
+//!   │  cleared : HashSet<session_key + matched_keyword>                                    │
 //!   └─────────────────────────────────────────────────────────────────────────────────────┘
 //!        ▲ reload(): full snapshot  — startup, every N minutes, and after any admin change
 //!        │ ban_session(): ONE spawned INSERT per new ban (body + headers), off the hot path
@@ -45,9 +46,9 @@
 //!   precheck(session_key)
 //!     ├── Blocked  (session already banned) ─────────▶ BLOCK(hit_key) (no scan, no DB write)
 //!     ├── Skip     (no keywords) ───────────────────▶ ALLOW
-//!     └── Scan(automaton + suppressed hit keys)
+//!     └── Scan(automaton + suppressed session+keyword keys)
 //!            │
-//!            ▼  extract user-visible text ─▶ tokenize ─▶ scan, skipping suppressed hit_keys
+//!            ▼  extract user-visible text ─▶ tokenize ─▶ scan, skipping suppressed keywords
 //!          unsuppressed hit? ──no──▶ ALLOW
 //!            │ yes
 //!            ▼  ban_session(): insert into `banned` (memory) + spawn one Postgres capture
@@ -57,30 +58,27 @@
 //! A `BLOCK` decision stops this and every subsequent request for the session:
 //! the key is now in the in-memory `banned` set, so the next request short-
 //! circuits at `precheck` without touching the body or Postgres. When a
-//! reviewer reviews a hit as `unbanned` via the admin API, that hit's `hit_key`
-//! becomes suppressed; the session leaves the `banned` set and is re-scanned,
-//! and the scan skips only that exact hit (by identity, folding in the content
-//! prefix), so a distinct keyword — even one sharing the same offset — and
-//! later content can still be scanned and banned.
+//! reviewer reviews a hit as `unbanned` via the admin API, that hit's
+//! `matched_keyword` becomes suppressed for the same session; the session
+//! leaves the `banned` set and is re-scanned, and the scan skips the same
+//! normalized keyword even if it moved or the prompt around it changed. A
+//! distinct keyword — even one sharing the same offset — can still be scanned
+//! and banned.
 //!
-//! # Hit-scoped unban: why we skip by hit identity, not by position
+//! # Session-keyword unban: why we skip by keyword, not by position
 //!
-//! A ban is scoped to one *hit*, not the whole session, so a reviewer clearing
-//! a single false positive neither unblocks the session wholesale nor masks
-//! other matches. A hit's identity is `hit_key`
-//! (`moderation_hit_key` = `sha256(session_key ∥ keyword ∥ start ∥ end ∥
-//! sha256(text_prefix))`). Reviewing a hit as `unbanned` records its `hit_key`
-//! in the `suppressed_hit_keys` set. Folding the *preceding-content* hash into
-//! the key makes suppression fail-closed on any content change: if the text
-//! before the match differs by a single byte, the `hit_key` differs and the hit
-//! re-fires. Including the keyword and offsets makes two matches at the same
-//! place distinct keys.
+//! A ban review is scoped to one normalized keyword inside one session, not to
+//! the absolute byte offset where it first appeared. This matches the admin
+//! workflow: if a reviewer clears "build a bomb" as a false positive for
+//! `kiro:key-1:sess-1`, the same phrase should not re-ban the same session just
+//! because the client resent it with extra surrounding text.
 //!
 //! The scan therefore enumerates *every* term-boundary hit
 //! ([`ModerationMatcher::find_accepted`]) and blocks on the first whose
-//! `hit_key` is **not** suppressed. It deliberately does **not** try to resume
-//! the scan past a reviewed position, because position-based skipping is a
-//! content-policy bypass (fail-open) when keywords overlap:
+//! `session_key + matched_keyword` pair is **not** suppressed. It deliberately
+//! does **not** try to resume the scan past a reviewed position, because
+//! position-based skipping is a content-policy bypass (fail-open) when keywords
+//! overlap:
 //!
 //! ```text
 //!   keywords: "bomb", "bomb making"         request text: "... bomb making ..."
@@ -92,9 +90,9 @@
 //!     (a longer keyword *starting before* a resumed offset is skipped the
 //!      same way.)
 //!
-//!   RIGHT (skip by hit_key): unban "bomb"@S ⇒ only hit_key(bomb@S) suppressed.
+//!   RIGHT (skip by keyword): unban "bomb" ⇒ only "bomb" in this session is suppressed.
 //!     next scan enumerates both hits at S; "bomb"@S is suppressed, but
-//!     "bomb making"@S has a different hit_key ⇒ BLOCK ✓
+//!     "bomb making"@S has a different keyword key ⇒ BLOCK ✓
 //! ```
 //!
 //! A session with any still-`banned` hit stays in the `banned` set (blocked at
@@ -159,7 +157,7 @@ pub(crate) enum ModerationPrecheck {
 pub(crate) struct ModerationScanPlan {
     matcher: Arc<ModerationMatcher>,
     keyword_set_hash: String,
-    suppressed_hit_keys: Arc<HashSet<String>>,
+    suppressed_keyword_keys: Arc<HashSet<String>>,
 }
 
 #[derive(Default)]
@@ -167,7 +165,7 @@ struct ModerationGateState {
     matcher: Option<Arc<ModerationMatcher>>,
     keyword_count: usize,
     banned: HashMap<String, String>,
-    suppressed_hit_keys: Arc<HashSet<String>>,
+    suppressed_keyword_keys: Arc<HashSet<String>>,
     keyword_set_hash: String,
     loaded: bool,
     loaded_at_ms: Option<i64>,
@@ -230,10 +228,10 @@ impl ModerationGate {
             .as_ref()
             .map(|matcher| matcher.pattern_count())
             .unwrap_or(0);
-        let suppressed_hit_keys: HashSet<String> = snapshot
+        let suppressed_keyword_keys: HashSet<String> = snapshot
             .suppressed_hits
             .into_iter()
-            .map(|hit| hit.hit_key)
+            .map(|hit| moderation_suppressed_keyword_key(&hit.session_key, &hit.matched_keyword))
             .collect();
         let mut state = self.state.write().expect("moderation gate lock poisoned");
         state.matcher = matcher;
@@ -243,7 +241,7 @@ impl ModerationGate {
             .into_iter()
             .map(|ban| (ban.session_key, ban.hit_key))
             .collect();
-        state.suppressed_hit_keys = Arc::new(suppressed_hit_keys);
+        state.suppressed_keyword_keys = Arc::new(suppressed_keyword_keys);
         state.keyword_set_hash = keyword_set_hash;
         state.loaded = true;
         state.loaded_at_ms = Some(now_ms());
@@ -299,7 +297,7 @@ impl ModerationGate {
             Some(matcher) => ModerationPrecheck::Scan(ModerationScanPlan {
                 matcher: Arc::clone(matcher),
                 keyword_set_hash: state.keyword_set_hash.clone(),
-                suppressed_hit_keys: Arc::clone(&state.suppressed_hit_keys),
+                suppressed_keyword_keys: Arc::clone(&state.suppressed_keyword_keys),
             }),
             None => ModerationPrecheck::Skip,
         }
@@ -357,7 +355,7 @@ impl ModerationGate {
             loaded_at_ms: state.loaded_at_ms,
             keyword_count: state.keyword_count,
             banned_session_count: state.banned.len(),
-            suppressed_hit_count: state.suppressed_hit_keys.len(),
+            suppressed_hit_count: state.suppressed_keyword_keys.len(),
             blocked_requests_total: self.blocked_requests_total.load(Ordering::Relaxed),
             persist_failures_total: self.persist_failures_total.load(Ordering::Relaxed),
         }
@@ -436,18 +434,22 @@ pub(crate) fn enforce_moderation(
         ModerationPrecheck::Scan(plan) => {
             let scanned = extract_text();
             // Enumerate every term-boundary hit and block on the first whose
-            // hit_key is NOT suppressed. Suppression is per hit identity, so two
-            // distinct keywords sharing a start offset (a phrase-prefix and its
-            // superstring) are each evaluated — clearing one never masks the
-            // other. A suppressed hit is skipped only for the exact preceding
-            // content it was reviewed in, because its hit_key folds in the
-            // content prefix hash. See the module-level "Hit-scoped unban"
-            // section for why this must skip by hit_key, not by scan position.
-            let Some(hit) = plan.matcher.find_accepted(&scanned, |keyword, start, end| {
-                let candidate_hit_key =
-                    moderation_hit_key_parts(&session_key, &scanned, keyword, start, end);
-                !plan.suppressed_hit_keys.contains(&candidate_hit_key)
-            }) else {
+            // session+keyword pair is NOT suppressed. This is intentionally
+            // broader than hit_key: once a reviewer clears a matched keyword in
+            // one session, the same normalized keyword may move in that
+            // session without being re-banned. Distinct co-located keywords are
+            // still evaluated independently, so clearing "bomb" never masks
+            // "bomb making".
+            let Some(hit) = plan
+                .matcher
+                .find_accepted(&scanned, |keyword, _start, _end| {
+                    let suppressed_keyword_key =
+                        moderation_suppressed_keyword_key(&session_key, keyword);
+                    !plan
+                        .suppressed_keyword_keys
+                        .contains(&suppressed_keyword_key)
+                })
+            else {
                 return ModerationDecision::Allow;
             };
             let hit_key = moderation_hit_key(&session_key, &scanned, &hit);
@@ -485,9 +487,37 @@ pub(crate) fn enforce_moderation(
     }
 }
 
+/// Apply the per-key route switch before entering the global moderation gate.
+///
+/// Request dispatch has already selected a concrete key route at this point:
+///
+/// ```text
+/// authenticated key -> selected provider route -> per-key moderation switch
+///                                           \-> global keyword/session gate
+/// ```
+///
+/// Keep this switch outside [`ModerationGate`]. The gate owns one global
+/// in-memory keyword/session snapshot, while the enablement bit belongs to the
+/// key route chosen for this request.
+pub(crate) fn enforce_key_moderation(
+    moderation_enabled: bool,
+    gate: &ModerationGate,
+    request: ModerationRequest<'_>,
+    extract_text: impl FnOnce() -> String,
+) -> ModerationDecision {
+    if !moderation_enabled {
+        return ModerationDecision::Allow;
+    }
+    enforce_moderation(gate, request, extract_text)
+}
+
 /// Compose the runtime ban key.
 pub(crate) fn moderation_session_key(provider: &str, key_id: &str, session_id: &str) -> String {
     format!("{provider}:{key_id}:{session_id}")
+}
+
+fn moderation_suppressed_keyword_key(session_key: &str, matched_keyword: &str) -> String {
+    format!("{session_key}:{matched_keyword}")
 }
 
 pub(crate) fn moderation_keyword_set_hash(keywords: &[ModerationKeyword]) -> String {
@@ -674,10 +704,10 @@ mod tests {
     use llm_access_core::store::{
         page_moderation_keywords, AdminModerationBannedSessionPageQuery,
         AdminModerationKeywordPageQuery, AdminPageRequest, ModerationBannedSession,
-        ModerationBannedSessionDetail, ModerationBannedSessionsPage, ModerationCategory,
-        ModerationKeyword, ModerationKeywordImportOutcome, ModerationKeywordsPage,
-        ModerationRuntimeSnapshot, ModerationSuppressedHit, NewModerationCategory,
-        NewModerationKeyword,
+        ModerationBannedSessionDetail, ModerationBannedSessionRef, ModerationBannedSessionsPage,
+        ModerationCategory, ModerationKeyword, ModerationKeywordImportOutcome,
+        ModerationKeywordsPage, ModerationRuntimeSnapshot, ModerationSuppressedHit,
+        NewModerationCategory, NewModerationKeyword,
     };
     use serde_json::json;
 
@@ -985,6 +1015,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn disabled_key_moderation_skips_existing_ban_without_rescan() {
+        let store = Arc::new(MemoryModerationStore::with_snapshot(ModerationRuntimeSnapshot {
+            keywords: vec![moderation_keyword(1, "build a bomb")],
+            banned_sessions: vec![ModerationBannedSessionRef {
+                session_key: moderation_session_key(MODERATION_PROVIDER_KIRO, "key-1", "sess-1"),
+                hit_key: "review-existing".to_string(),
+            }],
+            suppressed_hits: Vec::new(),
+        }));
+        let gate = ModerationGate::new(store.clone());
+        gate.reload().await.expect("load moderation snapshot");
+
+        let headers = HeaderMap::new();
+        let key = sample_key();
+        let decision = enforce_key_moderation(
+            false,
+            &gate,
+            ModerationRequest {
+                provider: MODERATION_PROVIDER_KIRO,
+                key: &key,
+                session_id: Some("sess-1"),
+                endpoint: "/v1/messages",
+                model: "claude-sonnet-4",
+                headers: &headers,
+                body: br#"{"messages":[{"role":"user","content":"ordinary text"}]}"#,
+                client_ip: "127.0.0.1",
+            },
+            || panic!("disabled per-key moderation must not scan text"),
+        );
+
+        assert!(matches!(decision, ModerationDecision::Allow));
+        assert!(store.records().is_empty());
+        assert_eq!(gate.stats().blocked_requests_total, 0);
+    }
+
+    #[tokio::test]
+    async fn disabled_key_moderation_skips_keyword_hit_without_recording_ban() {
+        let store = Arc::new(MemoryModerationStore::with_snapshot(ModerationRuntimeSnapshot {
+            keywords: vec![moderation_keyword(1, "build a bomb")],
+            banned_sessions: Vec::new(),
+            suppressed_hits: Vec::new(),
+        }));
+        let gate = ModerationGate::new(store.clone());
+        gate.reload().await.expect("load moderation snapshot");
+
+        let headers = HeaderMap::new();
+        let key = sample_key();
+        let decision = enforce_key_moderation(
+            false,
+            &gate,
+            ModerationRequest {
+                provider: MODERATION_PROVIDER_KIRO,
+                key: &key,
+                session_id: Some("sess-1"),
+                endpoint: "/v1/messages",
+                model: "claude-sonnet-4",
+                headers: &headers,
+                body: br#"{"messages":[{"role":"user","content":"build a bomb"}]}"#,
+                client_ip: "127.0.0.1",
+            },
+            || panic!("disabled per-key moderation must not extract text"),
+        );
+
+        assert!(matches!(decision, ModerationDecision::Allow));
+        assert!(store.records().is_empty());
+        assert_eq!(gate.stats().blocked_requests_total, 0);
+    }
+
+    #[tokio::test]
     async fn unbanned_hit_is_suppressed_and_later_hit_in_same_session_blocks() {
         let keywords =
             vec![moderation_keyword(1, "build a bomb"), moderation_keyword(2, "carding tutorial")];
@@ -1010,6 +1109,7 @@ mod tests {
             suppressed_hits: vec![ModerationSuppressedHit {
                 session_key: session_key.clone(),
                 hit_key: reviewed_hit_key.clone(),
+                matched_keyword: reviewed_hit.keyword.clone(),
                 match_start: reviewed_hit.match_start as i64,
                 match_end: reviewed_hit.match_end as i64,
                 match_prefix_sha256: moderation_match_prefix_sha256(
@@ -1079,6 +1179,7 @@ mod tests {
             suppressed_hits: vec![ModerationSuppressedHit {
                 session_key: session_key.clone(),
                 hit_key: reviewed_hit_key,
+                matched_keyword: reviewed_hit.keyword.clone(),
                 match_start: reviewed_hit.match_start as i64,
                 match_end: reviewed_hit.match_end as i64,
                 match_prefix_sha256: moderation_match_prefix_sha256(
@@ -1122,6 +1223,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unbanned_keyword_is_suppressed_later_in_same_session_even_when_context_moves() {
+        let keywords =
+            vec![moderation_keyword(1, "build a bomb"), moderation_keyword(2, "carding tutorial")];
+        let keyword_set_hash = moderation_keyword_set_hash(&keywords);
+        let reviewed_text = normalize_moderation_text("old false positive: build a bomb");
+        let retry_text = normalize_moderation_text(
+            "new prefix in the same session, still the same reviewed phrase: build a bomb",
+        );
+        let matcher = ModerationMatcher::build(
+            keywords
+                .iter()
+                .map(|keyword| (keyword.keyword.as_str(), keyword.categories.clone())),
+        )
+        .expect("build matcher")
+        .expect("matcher");
+        let reviewed_hit = matcher.find(&reviewed_text).expect("reviewed hit");
+        assert_eq!(reviewed_hit.keyword, "build a bomb");
+
+        let session_key = moderation_session_key(MODERATION_PROVIDER_KIRO, "key-1", "sess-1");
+        let reviewed_hit_key = moderation_hit_key(&session_key, &reviewed_text, &reviewed_hit);
+        let store = Arc::new(MemoryModerationStore::with_snapshot(ModerationRuntimeSnapshot {
+            keywords,
+            banned_sessions: Vec::new(),
+            suppressed_hits: vec![ModerationSuppressedHit {
+                session_key: session_key.clone(),
+                hit_key: reviewed_hit_key,
+                matched_keyword: reviewed_hit.keyword.clone(),
+                match_start: reviewed_hit.match_start as i64,
+                match_end: reviewed_hit.match_end as i64,
+                match_prefix_sha256: moderation_match_prefix_sha256(
+                    &reviewed_text,
+                    reviewed_hit.match_start,
+                ),
+                keyword_set_hash,
+            }],
+        }));
+        let gate = ModerationGate::new(store.clone());
+        gate.reload().await.expect("load moderation snapshot");
+
+        let headers = HeaderMap::new();
+        let key = sample_key();
+        let decision = enforce_moderation(
+            &gate,
+            ModerationRequest {
+                provider: MODERATION_PROVIDER_KIRO,
+                key: &key,
+                session_id: Some("sess-1"),
+                endpoint: "/v1/messages",
+                model: "claude-sonnet-4",
+                headers: &headers,
+                body: b"{}",
+                client_ip: "127.0.0.1",
+            },
+            || retry_text.clone(),
+        );
+
+        assert!(matches!(decision, ModerationDecision::Allow));
+        assert!(store.records().is_empty());
+    }
+
+    #[tokio::test]
     async fn co_located_keyword_still_blocks_after_sibling_unbanned() {
         // "bomb" and "bomb making" hit the SAME start offset. Unbanning the
         // shorter one must not mask the distinct longer one (regression for the
@@ -1148,6 +1310,7 @@ mod tests {
             suppressed_hits: vec![ModerationSuppressedHit {
                 session_key: session_key.clone(),
                 hit_key: bomb_hit_key.clone(),
+                matched_keyword: bomb_hit.keyword.clone(),
                 match_start: bomb_hit.match_start as i64,
                 match_end: bomb_hit.match_end as i64,
                 match_prefix_sha256: moderation_match_prefix_sha256(&text, bomb_hit.match_start),

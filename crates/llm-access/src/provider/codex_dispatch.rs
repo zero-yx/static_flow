@@ -82,7 +82,7 @@ use super::{
 use crate::{
     codex_refresh,
     moderation::{
-        enforce_moderation, moderation_blocked_message, moderation_text_for_json_body,
+        enforce_key_moderation, moderation_blocked_message, moderation_text_for_json_body,
         ModerationDecision, ModerationRequest, MODERATION_PROVIDER_CODEX,
     },
 };
@@ -259,11 +259,15 @@ pub async fn dispatch_codex_proxy(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    // Keyword moderation gate: reject (and, on a fresh keyword hit, capture and
-    // ban the session) before any upstream work. See `crate::moderation`.
+    // Route-selected flow:
+    //   authenticated key -> Codex route -> per-key moderation switch
+    //                                 \-> global keyword/session gate
+    // The switch stays on the route; the global gate keeps only keyword/session
+    // snapshot state.
     if let ModerationDecision::Block {
         review_id,
-    } = enforce_moderation(
+    } = enforce_key_moderation(
+        routes[0].moderation_enabled,
         &moderation_gate,
         ModerationRequest {
             provider: MODERATION_PROVIDER_CODEX,

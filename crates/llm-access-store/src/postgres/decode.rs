@@ -122,6 +122,7 @@ fn decode_key_bundle(row: &PgRow) -> anyhow::Result<KeyBundle> {
                 .or_else(|| Some("{}".to_string())),
             request_max_concurrency: row.get(16),
             request_min_start_interval_ms: row.get(17),
+            moderation_enabled: row.get_optional_bool("moderation_enabled").unwrap_or(true),
             codex_fast_enabled: row.get::<_, Option<bool>>(18).unwrap_or(true),
             codex_strict_session_rejection_enabled: row.get::<_, Option<bool>>(19).unwrap_or(false),
             codex_image_generation_enabled: row.get::<_, Option<bool>>(20).unwrap_or(true),
@@ -211,6 +212,7 @@ pub fn admin_key_from_bundle(bundle: &KeyBundle) -> AdminKey {
             .route
             .request_min_start_interval_ms
             .and_then(non_negative_i64_to_u64),
+        moderation_enabled: bundle.route.moderation_enabled,
         codex_fast_enabled: bundle.route.codex_fast_enabled,
         codex_strict_session_rejection_enabled: bundle.route.codex_strict_session_rejection_enabled,
         codex_image_generation_enabled: bundle.route.codex_image_generation_enabled,

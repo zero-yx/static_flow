@@ -137,6 +137,8 @@ pub(crate) struct CachedCodexRequestSnapshot {
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
     #[serde(default = "default_true")]
+    pub moderation_enabled: bool,
+    #[serde(default = "default_true")]
     pub codex_fast_enabled: bool,
     #[serde(default)]
     pub codex_strict_session_rejection_enabled: bool,
@@ -171,6 +173,8 @@ pub(crate) struct CachedKiroRequestSnapshot {
     pub model_group_preferred_account_names: BTreeMap<String, Vec<String>>,
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
+    #[serde(default = "default_true")]
+    pub moderation_enabled: bool,
     pub request_validation_enabled: bool,
     pub cache_estimation_enabled: bool,
     pub zero_cache_debug_enabled: bool,
@@ -313,6 +317,7 @@ mod codex_image_cache_tests {
             "use_all_active_accounts": false,
             "request_max_concurrency": null,
             "request_min_start_interval_ms": null,
+            "moderation_enabled": true,
             "codex_fast_enabled": true,
             "codex_strict_session_rejection_enabled": false,
             "codex_weight_free": 1,
@@ -888,6 +893,7 @@ mod tests {
             use_all_active_accounts: false,
             request_max_concurrency: Some(2),
             request_min_start_interval_ms: Some(50),
+            moderation_enabled: false,
             codex_fast_enabled: false,
             codex_strict_session_rejection_enabled: true,
             codex_image_generation_enabled: false,

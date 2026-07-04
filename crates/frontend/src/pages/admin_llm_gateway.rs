@@ -1278,6 +1278,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
             .map(|value| value.to_string())
             .unwrap_or_default()
     });
+    let moderation_enabled = use_state(|| key_item.moderation_enabled);
     let codex_fast_enabled = use_state(|| key_item.codex_fast_enabled);
     let codex_strict_session_rejection_enabled =
         use_state(|| key_item.codex_strict_session_rejection_enabled);
@@ -1300,6 +1301,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
         let account_group_id = account_group_id.clone();
         let request_max_concurrency = request_max_concurrency.clone();
         let request_min_start_interval_ms = request_min_start_interval_ms.clone();
+        let moderation_enabled = moderation_enabled.clone();
         let codex_fast_enabled = codex_fast_enabled.clone();
         let codex_strict_session_rejection_enabled = codex_strict_session_rejection_enabled.clone();
         let codex_image_standalone_generation_enabled =
@@ -1333,6 +1335,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                     .map(|value| value.to_string())
                     .unwrap_or_default(),
             );
+            moderation_enabled.set(key_item.moderation_enabled);
             codex_fast_enabled.set(key_item.codex_fast_enabled);
             codex_strict_session_rejection_enabled
                 .set(key_item.codex_strict_session_rejection_enabled);
@@ -1406,6 +1409,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
         let account_group_id = account_group_id.clone();
         let request_max_concurrency = request_max_concurrency.clone();
         let request_min_start_interval_ms = request_min_start_interval_ms.clone();
+        let moderation_enabled = moderation_enabled.clone();
         let codex_fast_enabled = codex_fast_enabled.clone();
         let codex_strict_session_rejection_enabled = codex_strict_session_rejection_enabled.clone();
         let codex_image_standalone_generation_enabled =
@@ -1428,6 +1432,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
             let request_max_concurrency_value = (*request_max_concurrency).trim().to_string();
             let request_min_start_interval_ms_value =
                 (*request_min_start_interval_ms).trim().to_string();
+            let moderation_enabled_value = *moderation_enabled;
             let codex_fast_enabled_value = *codex_fast_enabled;
             let codex_strict_session_rejection_enabled_value =
                 *codex_strict_session_rejection_enabled;
@@ -1492,6 +1497,7 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                     kiro_model_group_preferences: None,
                     request_max_concurrency: request_max_concurrency_value,
                     request_min_start_interval_ms: request_min_start_interval_ms_value,
+                    moderation_enabled: Some(moderation_enabled_value),
                     codex_fast_enabled: Some(codex_fast_enabled_value),
                     codex_strict_session_rejection_enabled: Some(
                         codex_strict_session_rejection_enabled_value,
@@ -1736,6 +1742,32 @@ fn key_editor_card(props: &KeyEditorCardProps) -> Html {
                     />
                     <span>{ "公开" }</span>
                 </label>
+                <div class={classes!("flex", "min-w-[260px]", "flex-col", "gap-1", "text-sm")}>
+                    <label class={classes!("flex", "items-center", "gap-2")}>
+                        <input
+                            type="checkbox"
+                            checked={*moderation_enabled}
+                            onchange={{
+                                let moderation_enabled = moderation_enabled.clone();
+                                Callback::from(move |event: Event| {
+                                    if let Some(target) = event.target_dyn_into::<HtmlInputElement>() {
+                                        moderation_enabled.set(target.checked());
+                                    }
+                                })
+                            }}
+                        />
+                        <span>{ "审核拦截" }</span>
+                    </label>
+                    <span class={classes!("text-xs", "leading-5", "text-[var(--muted)]")}>
+                        {
+                            if *moderation_enabled {
+                                "ON · 命中关键词会封禁该 key 的当前 session，并返回可定位的 review id"
+                            } else {
+                                "OFF · 仅此 key 跳过审核拦截；历史记录保留，重新开启后继续生效"
+                            }
+                        }
+                    </span>
+                </div>
                 <label class={classes!("flex", "items-center", "gap-2", "text-sm")}>
                     <input
                         type="checkbox"

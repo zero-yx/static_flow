@@ -6137,6 +6137,8 @@ pub struct AdminLlmGatewayKeyView {
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
     #[serde(default = "default_true")]
+    pub moderation_enabled: bool,
+    #[serde(default = "default_true")]
     pub codex_fast_enabled: bool,
     #[serde(default)]
     pub codex_strict_session_rejection_enabled: bool,
@@ -9035,6 +9037,7 @@ pub async fn create_admin_llm_gateway_key(
             kiro_model_group_preferences: BTreeMap::new(),
             request_max_concurrency,
             request_min_start_interval_ms,
+            moderation_enabled: true,
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_zero_cache_debug_enabled: false,
@@ -9102,6 +9105,7 @@ pub struct PatchAdminLlmGatewayKeyRequest<'a> {
     pub kiro_model_group_preferences: Option<&'a BTreeMap<String, String>>,
     pub request_max_concurrency: Option<u64>,
     pub request_min_start_interval_ms: Option<u64>,
+    pub moderation_enabled: Option<bool>,
     pub codex_fast_enabled: Option<bool>,
     pub codex_strict_session_rejection_enabled: Option<bool>,
     pub codex_image_generation_enabled: Option<bool>,
@@ -9143,6 +9147,7 @@ pub async fn patch_admin_llm_gateway_key(
             request.kiro_model_group_preferences,
             request.request_max_concurrency,
             request.request_min_start_interval_ms,
+            request.moderation_enabled,
             request.codex_fast_enabled,
             request.codex_strict_session_rejection_enabled,
             request.codex_image_generation_enabled,
@@ -9256,6 +9261,12 @@ pub async fn patch_admin_llm_gateway_key(
             body.insert(
                 "request_min_start_interval_ms".to_string(),
                 serde_json::Value::Number(request_min_start_interval_ms.into()),
+            );
+        }
+        if let Some(moderation_enabled) = request.moderation_enabled {
+            body.insert(
+                "moderation_enabled".to_string(),
+                serde_json::Value::Bool(moderation_enabled),
             );
         }
         if let Some(codex_fast_enabled) = request.codex_fast_enabled {
@@ -11592,6 +11603,7 @@ pub async fn create_admin_kiro_key(
             kiro_model_group_preferences: BTreeMap::new(),
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
+            moderation_enabled: true,
             kiro_request_validation_enabled: true,
             kiro_cache_estimation_enabled: true,
             kiro_zero_cache_debug_enabled: false,
@@ -11661,6 +11673,7 @@ pub async fn patch_admin_kiro_key(
             request.kiro_model_group_preferences,
             request.request_max_concurrency,
             request.request_min_start_interval_ms,
+            request.moderation_enabled,
             request.kiro_request_validation_enabled,
             request.kiro_cache_estimation_enabled,
             request.kiro_zero_cache_debug_enabled,
@@ -11758,6 +11771,12 @@ pub async fn patch_admin_kiro_key(
             let value = serde_json::to_value(preferences)
                 .map_err(|e| format!("Serialize error: {:?}", e))?;
             body.insert("kiro_model_group_preferences".to_string(), value);
+        }
+        if let Some(moderation_enabled) = request.moderation_enabled {
+            body.insert(
+                "moderation_enabled".to_string(),
+                serde_json::Value::Bool(moderation_enabled),
+            );
         }
         if let Some(kiro_request_validation_enabled) = request.kiro_request_validation_enabled {
             body.insert(

@@ -118,7 +118,8 @@ impl PostgresControlRepository {
                     r.kiro_anthropic_upstream_pool_mode
                         AS kiro_anthropic_upstream_pool_mode,
                     r.kiro_model_group_preferences_json::text
-                        AS kiro_model_group_preferences_json
+                        AS kiro_model_group_preferences_json,
+                    r.moderation_enabled AS moderation_enabled
                  FROM llm_keys k
                  LEFT JOIN llm_key_route_config r ON r.key_id = k.key_id
                  LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
@@ -171,7 +172,8 @@ impl PostgresControlRepository {
                     r.kiro_anthropic_upstream_pool_mode
                         AS kiro_anthropic_upstream_pool_mode,
                     r.kiro_model_group_preferences_json::text
-                        AS kiro_model_group_preferences_json
+                        AS kiro_model_group_preferences_json,
+                    r.moderation_enabled AS moderation_enabled
                  FROM llm_keys k
                  LEFT JOIN llm_key_route_config r ON r.key_id = k.key_id
                  LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
@@ -300,7 +302,8 @@ impl PostgresControlRepository {
                     r.kiro_anthropic_upstream_pool_mode
                         AS kiro_anthropic_upstream_pool_mode,
                     r.kiro_model_group_preferences_json::text
-                        AS kiro_model_group_preferences_json
+                        AS kiro_model_group_preferences_json,
+                    r.moderation_enabled AS moderation_enabled
                  FROM llm_keys k
                  LEFT JOIN llm_key_route_config r ON r.key_id = k.key_id
                  LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
@@ -383,6 +386,7 @@ impl PostgresControlRepository {
                             'disabled'
                         ) AS kiro_anthropic_upstream_pool_mode,
                         r.kiro_model_group_preferences_json,
+                        r.moderation_enabled,
                         g.account_names_json AS group_account_names_json,
                         COALESCE(NULLIF(r.route_strategy, ''), 'auto') AS route_strategy_norm
                     FROM llm_keys k
@@ -576,7 +580,8 @@ impl PostgresControlRepository {
                     page_keys.kiro_anthropic_upstream_pool_mode
                         AS kiro_anthropic_upstream_pool_mode,
                     page_keys.kiro_model_group_preferences_json::text
-                        AS kiro_model_group_preferences_json
+                        AS kiro_model_group_preferences_json,
+                    page_keys.moderation_enabled AS moderation_enabled
                  FROM page_keys
                  LEFT JOIN key_candidate_summary summary
                    ON summary.key_id = page_keys.key_id
@@ -644,7 +649,8 @@ impl PostgresControlRepository {
                     r.kiro_anthropic_upstream_pool_mode
                         AS kiro_anthropic_upstream_pool_mode,
                     r.kiro_model_group_preferences_json::text
-                        AS kiro_model_group_preferences_json
+                        AS kiro_model_group_preferences_json,
+                    r.moderation_enabled AS moderation_enabled
                  FROM llm_keys k
                  JOIN llm_key_route_config r ON r.key_id = k.key_id
                  LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
@@ -719,6 +725,7 @@ impl PostgresControlRepository {
                     account_group_id, preferred_pool_strategy, model_name_map_json,
                     request_max_concurrency,
                     request_min_start_interval_ms, codex_fast_enabled,
+                    moderation_enabled,
                     codex_strict_session_rejection_enabled,
                     codex_image_generation_enabled,
                     codex_image_direct_generation_enabled,
@@ -733,8 +740,8 @@ impl PostgresControlRepository {
                     kiro_model_group_preferences_json
                  ) VALUES (
                     $1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8, $9, $10, $11, $12,
-                    $13, $14, $15, $16, $17, $18, $19, $20, $21, $22::jsonb, $23::jsonb,
-                    $24, COALESCE($25::jsonb, '{}'::jsonb)
+                    $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23::jsonb,
+                    $24::jsonb, $25, COALESCE($26::jsonb, '{}'::jsonb)
                  )
                  ON CONFLICT(key_id) DO UPDATE SET
                     route_strategy = EXCLUDED.route_strategy,
@@ -746,6 +753,7 @@ impl PostgresControlRepository {
                     request_max_concurrency = EXCLUDED.request_max_concurrency,
                     request_min_start_interval_ms = EXCLUDED.request_min_start_interval_ms,
                     codex_fast_enabled = EXCLUDED.codex_fast_enabled,
+                    moderation_enabled = EXCLUDED.moderation_enabled,
                     codex_strict_session_rejection_enabled =
                         EXCLUDED.codex_strict_session_rejection_enabled,
                     codex_image_generation_enabled =
@@ -784,6 +792,7 @@ impl PostgresControlRepository {
                     &route.request_max_concurrency,
                     &route.request_min_start_interval_ms,
                     &route.codex_fast_enabled,
+                    &route.moderation_enabled,
                     &route.codex_strict_session_rejection_enabled,
                     &route.codex_image_generation_enabled,
                     &route.codex_image_direct_generation_enabled,
@@ -980,7 +989,8 @@ impl AdminKeyStore for PostgresControlRepository {
                 r.kiro_anthropic_upstream_pool_mode
                     AS kiro_anthropic_upstream_pool_mode,
                 r.kiro_model_group_preferences_json::text
-                    AS kiro_model_group_preferences_json
+                    AS kiro_model_group_preferences_json,
+                r.moderation_enabled AS moderation_enabled
              FROM llm_keys k
              LEFT JOIN llm_key_route_config r ON r.key_id = k.key_id
              LEFT JOIN llm_key_usage_rollups u ON u.key_id = k.key_id
@@ -1057,6 +1067,7 @@ impl AdminKeyStore for PostgresControlRepository {
             request_min_start_interval_ms: key
                 .request_min_start_interval_ms
                 .map(|value| value as i64),
+            moderation_enabled: true,
             codex_fast_enabled: true,
             codex_strict_session_rejection_enabled: false,
             codex_image_generation_enabled: true,
@@ -1152,6 +1163,9 @@ impl AdminKeyStore for PostgresControlRepository {
         }
         if let Some(value) = patch.request_min_start_interval_ms {
             bundle.route.request_min_start_interval_ms = value.map(|value| value as i64);
+        }
+        if let Some(value) = patch.moderation_enabled {
+            bundle.route.moderation_enabled = value;
         }
         if let Some(value) = patch.codex_fast_enabled {
             bundle.route.codex_fast_enabled = value;

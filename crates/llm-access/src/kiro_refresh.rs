@@ -923,6 +923,7 @@ mod tests {
             pool_strategy: llm_access_core::store::default_kiro_pool_strategy(),
             profile_arn: None,
             api_region: "us-east-1".to_string(),
+            moderation_enabled: true,
             request_validation_enabled: true,
             cache_estimation_enabled: true,
             zero_cache_debug_enabled: false,

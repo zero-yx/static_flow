@@ -228,8 +228,8 @@ pub struct ModerationBannedSession {
     pub match_start: i64,
     /// Byte offset just after the hit in normalized request text.
     pub match_end: i64,
-    /// SHA-256 of normalized text before `match_start`, used to bind hit
-    /// suppression to the exact reviewed preceding content.
+    /// SHA-256 of normalized text before `match_start`, used in the public
+    /// hit key/review id for locating the original captured row.
     pub match_prefix_sha256: String,
     /// Hash of the keyword set active when this hit was recorded.
     pub keyword_set_hash: String,
@@ -305,14 +305,16 @@ pub struct NewModerationBannedSession {
     pub banned_at_ms: i64,
 }
 
-/// One reviewed false-positive hit used by the runtime gate to suppress only
-/// that exact repeat match.
+/// One reviewed false-positive hit used by the runtime gate to suppress this
+/// normalized keyword in the same session.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ModerationSuppressedHit {
     /// Runtime ban key: `provider:key_id:session_id`.
     pub session_key: String,
     /// Stable key for this exact hit inside this session.
     pub hit_key: String,
+    /// Normalized keyword text that was reviewed for this session.
+    pub matched_keyword: String,
     /// Byte offset where the reviewed hit starts in normalized request text.
     pub match_start: i64,
     /// Byte offset just after the reviewed hit in normalized request text.

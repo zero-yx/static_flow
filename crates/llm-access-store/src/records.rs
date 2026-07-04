@@ -64,6 +64,8 @@ pub struct KeyRouteConfig {
     pub request_max_concurrency: Option<i64>,
     /// Optional per-key pacing interval.
     pub request_min_start_interval_ms: Option<i64>,
+    /// Whether keyword moderation blocks requests for this key.
+    pub moderation_enabled: bool,
     /// Whether Codex fast/priority requests are enabled for this key.
     pub codex_fast_enabled: bool,
     /// Whether repeated fatal Codex session errors are rejected early.

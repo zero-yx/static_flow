@@ -658,6 +658,7 @@ mod tests {
             auth_json,
             map_gpt53_codex_to_spark: false,
             auth_refresh_enabled: true,
+            moderation_enabled: true,
             codex_fast_enabled: true,
             codex_strict_session_rejection_enabled: false,
             codex_image_generation_enabled: true,

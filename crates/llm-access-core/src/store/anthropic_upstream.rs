@@ -276,6 +276,8 @@ pub struct ProviderAnthropicUpstreamRoute {
     pub request_max_concurrency: Option<u64>,
     /// Key-level pacing interval.
     pub request_min_start_interval_ms: Option<u64>,
+    /// Whether keyword moderation blocks requests for this Kiro key route.
+    pub moderation_enabled: bool,
     /// Channel-level concurrency cap.
     pub channel_max_concurrency: u64,
     /// Channel-level pacing interval.

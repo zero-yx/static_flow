@@ -1736,6 +1736,7 @@ impl AdminKiroAccountStore for PostgresControlRepository {
             pool_strategy,
             profile_arn,
             api_region,
+            moderation_enabled: true,
             request_validation_enabled: true,
             cache_estimation_enabled: true,
             zero_cache_debug_enabled: false,

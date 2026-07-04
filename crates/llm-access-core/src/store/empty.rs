@@ -540,6 +540,7 @@ impl AdminKeyStore for EmptyAdminKeyStore {
             kiro_model_group_preferences: std::collections::BTreeMap::new(),
             request_max_concurrency: key.request_max_concurrency,
             request_min_start_interval_ms: key.request_min_start_interval_ms,
+            moderation_enabled: true,
             codex_fast_enabled: true,
             codex_strict_session_rejection_enabled: false,
             codex_image_generation_enabled: true,

@@ -77,6 +77,9 @@ pub struct AdminKey {
     pub request_max_concurrency: Option<u64>,
     /// Per-key request pacing interval.
     pub request_min_start_interval_ms: Option<u64>,
+    /// Whether keyword moderation blocks requests for this key.
+    #[serde(default = "default_true")]
+    pub moderation_enabled: bool,
     /// Whether Codex fast/priority requests are allowed for this key.
     pub codex_fast_enabled: bool,
     /// Whether repeated fatal Codex errors for the same session are rejected
@@ -391,6 +394,8 @@ pub struct AdminKeyPatch {
     pub request_max_concurrency: Option<Option<u64>>,
     /// New per-key request pacing interval.
     pub request_min_start_interval_ms: Option<Option<u64>>,
+    /// New per-key moderation gate toggle.
+    pub moderation_enabled: Option<bool>,
     /// New Codex fast toggle.
     pub codex_fast_enabled: Option<bool>,
     /// New Codex strict session-rejection toggle.
@@ -463,6 +468,7 @@ mod tests {
             kiro_model_group_preferences: BTreeMap::new(),
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
+            moderation_enabled: true,
             codex_fast_enabled: true,
             codex_strict_session_rejection_enabled: false,
             codex_image_generation_enabled: true,

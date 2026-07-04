@@ -193,6 +193,11 @@ const POSTGRES_MIGRATIONS: &[SqlMigration] = &[
         name: "moderation_categories",
         sql: include_str!("../migrations/postgres/0037_moderation_categories.sql"),
     },
+    SqlMigration {
+        version: 38,
+        name: "per_key_moderation_toggle",
+        sql: include_str!("../migrations/postgres/0038_per_key_moderation_toggle.sql"),
+    },
 ];
 
 /// Return target DuckDB migrations in execution order.
@@ -624,5 +629,19 @@ mod tests {
         assert!(migration.sql.contains("model_ids JSONB"));
         assert!(migration.sql.contains("last_models_checked_at_ms"));
         assert!(migration.sql.contains("last_test_model"));
+    }
+
+    #[test]
+    fn postgres_migrations_include_per_key_moderation_toggle() {
+        let migrations = super::postgres_migrations();
+        let migration = migrations
+            .iter()
+            .find(|migration| migration.name == "per_key_moderation_toggle")
+            .expect("per-key moderation toggle migration exists");
+
+        assert_eq!(migration.version, 38);
+        assert!(migration.sql.contains("llm_key_route_config"));
+        assert!(migration.sql.contains("moderation_enabled"));
+        assert!(migration.sql.contains("DEFAULT TRUE"));
     }
 }

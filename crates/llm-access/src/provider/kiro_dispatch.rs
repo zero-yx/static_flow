@@ -85,7 +85,7 @@ use super::{
 use crate::{
     kiro_refresh,
     moderation::{
-        enforce_moderation, moderation_blocked_message, moderation_text_for_kiro,
+        enforce_key_moderation, moderation_blocked_message, moderation_text_for_kiro,
         ModerationDecision, ModerationRequest, MODERATION_PROVIDER_KIRO,
     },
 };
@@ -324,13 +324,15 @@ pub async fn dispatch_kiro_proxy(
     let resolved_session =
         resolve_kiro_request_session(&request_headers, payload.metadata.as_ref());
     let affinity_session_id = kiro_affinity_session_id(&resolved_session).map(str::to_string);
-    // Keyword moderation gate: reject the request (and, on a fresh keyword hit,
-    // capture and ban the session) before any upstream work. The gate is
-    // dormant-cheap and reads only in-memory state; see `crate::moderation` for
-    // the full decision flow.
+    // Route-selected flow:
+    //   authenticated key -> Kiro route -> per-key moderation switch
+    //                                \-> global keyword/session gate
+    // The switch stays on the route; the global gate keeps only keyword/session
+    // snapshot state.
     if let ModerationDecision::Block {
         review_id,
-    } = enforce_moderation(
+    } = enforce_key_moderation(
+        routes[0].moderation_enabled,
         &moderation_gate,
         ModerationRequest {
             provider: MODERATION_PROVIDER_KIRO,

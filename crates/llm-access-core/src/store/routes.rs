@@ -54,6 +54,8 @@ pub struct ProviderCodexRoute {
     pub map_gpt53_codex_to_spark: bool,
     /// Whether this account may participate in automatic auth refresh.
     pub auth_refresh_enabled: bool,
+    /// Whether keyword moderation blocks requests for this key route.
+    pub moderation_enabled: bool,
     /// Whether Codex fast/priority requests are allowed for this key.
     pub codex_fast_enabled: bool,
     /// Whether fatal Codex session errors reject repeated requests for the same
@@ -212,6 +214,8 @@ pub struct ProviderKiroRoute {
     pub profile_arn: Option<String>,
     /// Effective API region used by Kiro upstream requests.
     pub api_region: String,
+    /// Whether keyword moderation blocks requests for this key route.
+    pub moderation_enabled: bool,
     /// Whether public request validation is enabled for this key.
     pub request_validation_enabled: bool,
     /// Whether cache estimation is enabled for this key.

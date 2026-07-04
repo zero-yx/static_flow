@@ -142,8 +142,8 @@ impl AdminModerationStore for PostgresControlRepository {
         let suppressed_rows = self
             .client
             .query(
-                "SELECT session_key, hit_key, match_start, match_end, match_prefix_sha256,
-                        keyword_set_hash
+                "SELECT session_key, hit_key, matched_keyword, match_start, match_end,
+                        match_prefix_sha256, keyword_set_hash
                  FROM llm_moderation_banned_sessions
                  WHERE status = 'unbanned'",
                 &[],
@@ -155,10 +155,11 @@ impl AdminModerationStore for PostgresControlRepository {
             .map(|row| ModerationSuppressedHit {
                 session_key: row.get(0),
                 hit_key: row.get(1),
-                match_start: row.get(2),
-                match_end: row.get(3),
-                match_prefix_sha256: row.get(4),
-                keyword_set_hash: row.get(5),
+                matched_keyword: row.get(2),
+                match_start: row.get(3),
+                match_end: row.get(4),
+                match_prefix_sha256: row.get(5),
+                keyword_set_hash: row.get(6),
             })
             .collect();
         Ok(ModerationRuntimeSnapshot {

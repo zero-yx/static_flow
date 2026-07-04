@@ -603,6 +603,8 @@ pub(crate) struct PatchLlmGatewayKeyRequest {
     #[serde(default)]
     request_min_start_interval_ms_unlimited: bool,
     #[serde(default)]
+    moderation_enabled: Option<bool>,
+    #[serde(default)]
     codex_fast_enabled: Option<bool>,
     #[serde(default)]
     codex_strict_session_rejection_enabled: Option<bool>,
@@ -6301,6 +6303,7 @@ fn codex_validation_route(
         auth_json: auth.auth_json.clone(),
         map_gpt53_codex_to_spark: false,
         auth_refresh_enabled: true,
+        moderation_enabled: true,
         codex_fast_enabled: true,
         codex_strict_session_rejection_enabled: false,
         codex_image_generation_enabled: true,
@@ -7200,6 +7203,7 @@ fn normalize_key_patch(
         kiro_model_group_preferences,
         request_max_concurrency,
         request_min_start_interval_ms,
+        moderation_enabled: request.moderation_enabled,
         codex_fast_enabled: request.codex_fast_enabled,
         codex_strict_session_rejection_enabled: request.codex_strict_session_rejection_enabled,
         codex_image_generation_enabled: request.codex_image_generation_enabled,
@@ -8515,6 +8519,7 @@ mod tests {
             request_min_start_interval_ms: None,
             request_max_concurrency_unlimited: false,
             request_min_start_interval_ms_unlimited: false,
+            moderation_enabled: None,
             codex_fast_enabled: None,
             codex_strict_session_rejection_enabled: None,
             codex_image_generation_enabled: None,
@@ -8564,6 +8569,7 @@ mod tests {
             kiro_model_group_preferences: BTreeMap::new(),
             request_max_concurrency: None,
             request_min_start_interval_ms: None,
+            moderation_enabled: true,
             codex_fast_enabled: true,
             codex_strict_session_rejection_enabled: false,
             codex_image_generation_enabled: false,
@@ -8801,6 +8807,16 @@ mod tests {
         let patch = normalize_key_patch(request).expect("full request logging toggle");
 
         assert_eq!(patch.kiro_full_request_logging_enabled, Some(true));
+    }
+
+    #[test]
+    fn normalize_key_patch_accepts_moderation_toggle() {
+        let mut request = empty_key_patch_request();
+        request.moderation_enabled = Some(false);
+
+        let patch = normalize_key_patch(request).expect("moderation toggle");
+
+        assert_eq!(patch.moderation_enabled, Some(false));
     }
 
     #[test]
@@ -9703,6 +9719,19 @@ mod tests {
             patch.kiro_anthropic_upstream_pool_mode.as_deref(),
             Some(core_store::ANTHROPIC_UPSTREAM_POOL_MODE_PREFERRED_BEFORE_KIRO)
         );
+    }
+
+    #[test]
+    fn normalize_kiro_key_patch_preserves_shared_moderation_toggle() {
+        let patch = normalize_kiro_key_patch(PatchLlmGatewayKeyRequest {
+            moderation_enabled: Some(false),
+            codex_fast_enabled: Some(true),
+            ..empty_key_patch_request()
+        })
+        .expect("kiro key patch should normalize");
+
+        assert_eq!(patch.moderation_enabled, Some(false));
+        assert_eq!(patch.codex_fast_enabled, None);
     }
 
     #[test]

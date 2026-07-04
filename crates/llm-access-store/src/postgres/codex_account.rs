@@ -1022,6 +1022,7 @@ impl AdminCodexAccountStore for PostgresControlRepository {
             auth_json: record.auth_json,
             map_gpt53_codex_to_spark: settings.map_gpt53_codex_to_spark,
             auth_refresh_enabled: settings.auth_refresh_enabled,
+            moderation_enabled: true,
             codex_fast_enabled: true,
             codex_strict_session_rejection_enabled: false,
             codex_image_generation_enabled: true,
