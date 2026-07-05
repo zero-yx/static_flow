@@ -217,13 +217,28 @@ impl ModerationGate {
     pub async fn reload(&self) -> anyhow::Result<()> {
         let snapshot = self.store.load_moderation_runtime_snapshot().await?;
         let keyword_set_hash = moderation_keyword_set_hash(&snapshot.keywords);
-        let matcher = ModerationMatcher::build(
-            snapshot
-                .keywords
-                .iter()
-                .map(|keyword| (keyword.keyword.as_str(), keyword.categories.clone())),
-        )?
-        .map(Arc::new);
+        // Rebuild the matcher (Aho-Corasick automaton + a seeded Jieba
+        // dictionary clone) only when the keyword set actually changed. The
+        // banned/suppressed sets below still refresh every reload; reusing the
+        // matcher avoids cloning the ~350k-entry dictionary on no-op refreshes.
+        let reusable_matcher = {
+            let state = self.state.read().expect("moderation gate lock poisoned");
+            if state.keyword_set_hash == keyword_set_hash {
+                state.matcher.clone()
+            } else {
+                None
+            }
+        };
+        let matcher = match reusable_matcher {
+            Some(existing) => Some(existing),
+            None => ModerationMatcher::build(
+                snapshot
+                    .keywords
+                    .iter()
+                    .map(|keyword| (keyword.keyword.as_str(), keyword.categories.clone())),
+            )?
+            .map(Arc::new),
+        };
         let keyword_count = matcher
             .as_ref()
             .map(|matcher| matcher.pattern_count())
@@ -401,11 +416,12 @@ pub(crate) struct ModerationRequest<'a> {
 }
 
 /// Enforce the keyword moderation gate for one request, shared by every
-/// provider dispatch hook. `extract_text` yields the normalized text to scan
-/// and is invoked only when the gate must actually scan (keywords configured
-/// and the session is not already banned), so the caller
-/// pays the extraction cost only when it can change the outcome. Returns
-/// [`ModerationDecision::Block`] when the request must be rejected.
+/// provider dispatch hook. `extract_text` yields the raw request text to scan;
+/// the matcher normalizes it through its keyword-seeded analyzer. It is invoked
+/// only when the gate must actually scan (keywords configured and the session is
+/// not already banned), so the caller pays the extraction cost only when it can
+/// change the outcome. Returns [`ModerationDecision::Block`] when the request
+/// must be rejected.
 pub(crate) fn enforce_moderation(
     gate: &ModerationGate,
     request: ModerationRequest<'_>,
@@ -432,7 +448,9 @@ pub(crate) fn enforce_moderation(
             }
         },
         ModerationPrecheck::Scan(plan) => {
-            let scanned = extract_text();
+            // Normalize through the matcher's keyword-seeded analyzer so keyword
+            // spans survive as tokens in the request's surrounding Chinese.
+            let scanned = plan.matcher.normalize(&extract_text());
             // Enumerate every term-boundary hit and block on the first whose
             // session+keyword pair is NOT suppressed. This is intentionally
             // broader than hit_key: once a reviewer clears a matched keyword in
@@ -521,9 +539,10 @@ fn moderation_suppressed_keyword_key(session_key: &str, matched_keyword: &str) -
 }
 
 pub(crate) fn moderation_keyword_set_hash(keywords: &[ModerationKeyword]) -> String {
-    let mut normalized: Vec<&str> = keywords
+    let mut normalized: Vec<String> = keywords
         .iter()
-        .map(|keyword| keyword.keyword.as_str())
+        .map(|keyword| normalize_moderation_text(&keyword.keyword))
+        .filter(|keyword| !keyword.is_empty())
         .collect();
     normalized.sort_unstable();
     let mut hasher = Sha256::new();
@@ -637,7 +656,9 @@ pub(crate) fn moderation_body_text(body: &[u8]) -> String {
     String::from_utf8_lossy(body).into_owned()
 }
 
-/// Normalized moderation text for a parsed Anthropic messages request.
+/// Collect the user-visible request text for a parsed Anthropic messages
+/// request. Returns raw (un-normalized) text; the moderation matcher normalizes
+/// it through its keyword-seeded analyzer inside [`enforce_moderation`].
 pub(crate) fn moderation_text_for_kiro(payload: &MessagesRequest) -> String {
     let mut collected = String::new();
     if let Some(system) = &payload.system {
@@ -671,13 +692,15 @@ pub(crate) fn moderation_text_for_kiro(payload: &MessagesRequest) -> String {
             },
         }
     }
-    normalize_moderation_text(&collected)
+    collected
 }
 
-/// Normalized moderation text for a raw JSON request body (Codex surface).
+/// Collect the user-visible request text from a raw JSON request body (Codex
+/// surface). Returns raw (un-normalized) text; the matcher normalizes it inside
+/// [`enforce_moderation`]. `None` when the body is not JSON.
 pub(crate) fn moderation_text_for_json_body(body: &[u8]) -> Option<String> {
     let value = serde_json::from_slice::<serde_json::Value>(body).ok()?;
-    Some(normalize_moderation_text(&extract_moderation_text(&value)))
+    Some(extract_moderation_text(&value))
 }
 
 fn moderation_refresh_interval() -> Duration {
@@ -876,6 +899,19 @@ mod tests {
     }
 
     #[test]
+    fn keyword_set_hash_uses_analyzer_terms() {
+        let raw = vec![moderation_keyword(1, "口交")];
+        let legacy_canonical = vec![moderation_keyword(1, "口 交")];
+        let different = vec![moderation_keyword(1, "接口交互")];
+
+        assert_eq!(
+            moderation_keyword_set_hash(&raw),
+            moderation_keyword_set_hash(&legacy_canonical)
+        );
+        assert_ne!(moderation_keyword_set_hash(&raw), moderation_keyword_set_hash(&different));
+    }
+
+    #[test]
     fn derived_session_key_is_stable_and_content_scoped() {
         let a = derived_moderation_session_key(MODERATION_PROVIDER_CODEX, "key-1", b"hello world");
         let b = derived_moderation_session_key(MODERATION_PROVIDER_CODEX, "key-1", b"hello world");
@@ -924,21 +960,25 @@ mod tests {
             ]
         }))
         .expect("parse messages request");
+        // Raw collected text (the matcher normalizes at scan time), so casing
+        // and the original wording are preserved here.
         let text = moderation_text_for_kiro(&payload);
-        assert!(text.contains("you are helpful"));
-        assert!(text.contains("how to build a bomb"));
+        assert!(text.contains("You are HELPFUL"));
+        assert!(text.contains("How to Build a Bomb"));
         assert!(!text.contains("claude-sonnet-4"));
     }
 
     #[test]
-    fn json_body_text_extraction_normalizes_content() {
+    fn json_body_text_extraction_collects_content() {
         let body = json!({
             "model": "gpt-5",
             "messages": [{"role": "user", "content": "Hello  World"}]
         })
         .to_string();
+        // Raw collected text; normalization to "hello world" happens in the
+        // matcher, not here.
         let text = moderation_text_for_json_body(body.as_bytes()).expect("some text");
-        assert_eq!(text, "hello world");
+        assert_eq!(text, "Hello  World");
     }
 
     #[tokio::test]
