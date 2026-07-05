@@ -14,6 +14,7 @@ const createLearningRepo = process.env.GITHUB_CREATE_LEARNING_REPO === "1";
 const learningRepoOwner = process.env.GITHUB_LEARNING_REPO_OWNER || githubLogin;
 const auto2faFun = process.env.GITHUB_AUTO_2FA_FUN === "1";
 const totpSecret = process.env.GITHUB_TOTP_SECRET || "";
+const loginOnly = process.env.GITHUB_LOGIN_ONLY === "1";
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -667,6 +668,19 @@ function passwordChangeSettledAfterSubmit(current) {
   );
 }
 
+function loginOnlyComplete(current) {
+  const url = current.url || "";
+  const lower = (current.text || "").toLowerCase();
+  const visiblePasswordInputs = (current.passwordInputs || []).filter((item) => item.visible);
+  return (
+    url.includes("github.com/settings/security") &&
+    visiblePasswordInputs.length === 0 &&
+    (lower.includes("account security") ||
+      lower.includes("two-factor authentication") ||
+      lower.includes("passkeys"))
+  );
+}
+
 export {
   isGithubLoginPage,
   isGithubTwoFactorPrompt,
@@ -678,6 +692,7 @@ export {
   learningRepoDescriptionForAccount,
   learningRepoNameForAccount,
   learningRepoReadmeCommitted,
+  loginOnlyComplete,
   passwordChangeSettledAfterSubmit,
   randomPostPasswordChangeDelayMs,
 };
@@ -687,8 +702,8 @@ async function main() {
     console.error("GITHUB_DEVTOOLS_PORT is required");
     process.exit(2);
   }
-  if (!githubLogin || !currentPassword || !newPassword) {
-    console.error("GitHub login, current password, and new password are required");
+  if (!githubLogin || !currentPassword || (!loginOnly && !newPassword)) {
+    console.error("GitHub login, current password, and new password are required unless login-only mode is enabled");
     process.exit(2);
   }
 
@@ -714,6 +729,12 @@ async function main() {
       const repo = await createLearningRepository();
       console.log(`Browser helper: created learning repository ${repo.url}`);
     }
+    ws.close();
+    process.exit(0);
+  }
+
+  async function finishLoginOnly() {
+    console.log("Browser helper: GitHub login-only reached security settings");
     ws.close();
     process.exit(0);
   }
@@ -804,6 +825,10 @@ async function main() {
     console.log("Browser helper: submitted GitHub sudo password");
     await sleep(2500);
     continue;
+  }
+
+  if (loginOnly && loginOnlyComplete(current)) {
+    await finishLoginOnly();
   }
 
   if (!submittedPasswordChange && hasPasswordChangeForm(current)) {

@@ -37,6 +37,12 @@ class GithubPasswordRotatorTest(unittest.TestCase):
         self.assertFalse(hasattr(args, "current_password"))
         self.assertFalse(hasattr(args, "new_password"))
 
+    def test_parse_args_supports_login_only_mode(self):
+        args = module.parse_args(["--github-login", "octo", "--login-only"])
+
+        self.assertTrue(args.login_only)
+        self.assertFalse(args.create_learning_repo)
+
     def test_resolve_secret_reads_environment_without_printing_value(self):
         old_value = os.environ.get("GH_PASSWORD_TEST")
         os.environ["GH_PASSWORD_TEST"] = "secret-value"
@@ -93,6 +99,44 @@ class GithubPasswordRotatorTest(unittest.TestCase):
         self.assertEqual(env["GITHUB_CREATE_LEARNING_REPO"], "0")
         self.assertEqual(env["GITHUB_AUTO_2FA_FUN"], "0")
         self.assertEqual(env["GITHUB_TOTP_SECRET"], "")
+        self.assertEqual(env["GITHUB_LOGIN_ONLY"], "0")
+
+    def test_start_browser_helper_passes_login_only_mode_to_browser_helper(self):
+        calls = []
+
+        class FakeProcess:
+            pass
+
+        def fake_which(name):
+            if name == "node":
+                return "/usr/bin/node"
+            return None
+
+        def fake_popen(cmd, env, **kwargs):
+            calls.append((cmd, env, kwargs))
+            return FakeProcess()
+
+        args = module.parse_args(["--github-login", "octo", "--login-only"])
+        original_which = module.shutil.which
+        original_popen = module.subprocess.Popen
+        module.shutil.which = fake_which
+        module.subprocess.Popen = fake_popen
+        try:
+            module.start_browser_helper(
+                args,
+                9222,
+                current_password="old-secret",
+                new_password="",
+            )
+        finally:
+            module.shutil.which = original_which
+            module.subprocess.Popen = original_popen
+
+        self.assertEqual(len(calls), 1)
+        cmd, env, _kwargs = calls[0]
+        self.assertNotIn("old-secret", cmd)
+        self.assertEqual(env["GITHUB_LOGIN_ONLY"], "1")
+        self.assertEqual(env["GITHUB_NEW_PASSWORD"], "")
 
     def test_create_learning_repo_flag_is_passed_to_browser_helper(self):
         calls = []
@@ -188,6 +232,25 @@ class GithubPasswordRotatorTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("dry_run", result.stdout)
         self.assertIn("octo", result.stdout)
+
+    def test_dry_run_login_only_does_not_require_new_password(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--github-login",
+                "octo",
+                "--login-only",
+                "--dry-run",
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('"login_only": true', result.stdout)
 
 
 if __name__ == "__main__":

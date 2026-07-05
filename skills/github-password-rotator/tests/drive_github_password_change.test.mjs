@@ -7,6 +7,7 @@ import {
   learningRepoContentForAccount,
   learningRepoReadmeCommitted,
   learningRepoNameForAccount,
+  loginOnlyComplete,
   passwordChangeSettledAfterSubmit,
   randomPostPasswordChangeDelayMs,
   requiresManualGithubStep,
@@ -23,6 +24,23 @@ test("does not treat the account security settings page as manual verification",
 
   assert.equal(
     requiresManualGithubStep("https://github.com/settings/security", settingsText),
+    false,
+  );
+});
+
+test("login-only mode completes only on the account security settings page", () => {
+  assert.equal(
+    loginOnlyComplete({
+      url: "https://github.com/settings/security",
+      text: "Account security\nTwo-factor authentication\nPasskeys",
+    }),
+    true,
+  );
+  assert.equal(
+    loginOnlyComplete({
+      url: "https://github.com/settings/profile",
+      text: "Public profile",
+    }),
     false,
   );
 });

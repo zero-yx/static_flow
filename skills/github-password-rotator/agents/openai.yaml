@@ -1,4 +1,4 @@
 interface:
   display_name: "GitHub Password Rotator"
-  short_description: "Rotate GitHub passwords and optionally create a beginner learning repository."
-  default_prompt: "Use $github-password-rotator to change a GitHub account password with 2fa.fun app-code support and create the hello-world learning repository."
+  short_description: "Log in to GitHub security settings or rotate GitHub passwords."
+  default_prompt: "Use $github-password-rotator to log in to GitHub security settings for manual 2FA work, or to rotate a GitHub password with browser automation."

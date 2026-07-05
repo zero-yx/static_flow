@@ -46,6 +46,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--debug-port", type=int)
     parser.add_argument("--keep-browser", action="store_true")
     parser.add_argument(
+        "--login-only",
+        action="store_true",
+        help="Log in and stop on the GitHub security settings page without changing the password",
+    )
+    parser.add_argument(
         "--create-learning-repo",
         action="store_true",
         help="Create a beginner learning repository after the password change completes",
@@ -155,6 +160,7 @@ def start_browser_helper(
             "GITHUB_LEARNING_REPO_OWNER": args.github_login,
             "GITHUB_AUTO_2FA_FUN": "1" if args.auto_2fa_fun else "0",
             "GITHUB_TOTP_SECRET": totp_secret,
+            "GITHUB_LOGIN_ONLY": "1" if args.login_only else "0",
         }
     )
     return subprocess.Popen(["node", str(NODE_DRIVER)], env=env)
@@ -172,12 +178,16 @@ def dry_run_summary(args: argparse.Namespace) -> dict[str, Any]:
         "manual_timeout_seconds": args.manual_timeout_seconds,
         "create_learning_repo": args.create_learning_repo,
         "auto_2fa_fun": args.auto_2fa_fun,
+        "login_only": args.login_only,
+        "keep_browser": args.keep_browser or args.login_only,
         "driver": str(NODE_DRIVER),
     }
 
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+    if args.login_only:
+        args.keep_browser = True
     if args.dry_run:
         log(json.dumps(dry_run_summary(args), ensure_ascii=False, indent=2))
         return 0
@@ -186,12 +196,14 @@ def main(argv: list[str]) -> int:
         args.current_password_env,
         f"Current GitHub password for {args.github_login}: ",
     )
-    new_password = resolve_secret(
-        args.new_password_env,
-        f"New GitHub password for {args.github_login}: ",
-    )
-    if current_password == new_password:
-        raise SystemExit("new password must differ from current password")
+    new_password = ""
+    if not args.login_only:
+        new_password = resolve_secret(
+            args.new_password_env,
+            f"New GitHub password for {args.github_login}: ",
+        )
+        if current_password == new_password:
+            raise SystemExit("new password must differ from current password")
     totp_secret = ""
     if args.auto_2fa_fun:
         totp_secret = resolve_secret(
@@ -215,7 +227,8 @@ def main(argv: list[str]) -> int:
         code = helper.wait()
         if code != 0:
             raise RuntimeError(f"browser helper failed with code {code}")
-        log(json.dumps({"status": "password_change_completed", "github_login": args.github_login}))
+        status = "login_completed" if args.login_only else "password_change_completed"
+        log(json.dumps({"status": status, "github_login": args.github_login}))
         return 0
     finally:
         if helper and helper.poll() is None:

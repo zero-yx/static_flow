@@ -1,6 +1,6 @@
 ---
 name: github-password-rotator
-description: Use when a GitHub account password needs to be changed or rotated with browser automation, especially when Codex should prefill username/password fields while the user manually handles 2FA, passkeys, device checks, CAPTCHA, suspended-account pages, or other GitHub verification steps.
+description: Use when a GitHub account password needs to be changed or rotated, or when Codex should log in to GitHub security settings so the user can manually change 2FA/passkeys. Applies when Codex should prefill username/password fields while the user handles 2FA, device checks, CAPTCHA, or suspended-account pages.
 ---
 
 # GitHub Password Rotator
@@ -13,8 +13,27 @@ description: Use when a GitHub account password needs to be changed or rotated w
 - Use an isolated Chrome profile and the HTTP proxy for the whole browser flow. Default proxy: `http://127.0.0.1:11111`.
 - Treat 2FA, passkeys, CAPTCHA, unusual verification, and suspended-account pages as manual user steps.
 - Do not claim the password changed unless the script reports completion or the user confirms success in the browser.
+- For 2FA/passkey changes, use `--login-only`; do not run the password-change flow and try to avoid the password form at runtime.
 
 ## Standard Flow
+
+For logging in to GitHub security settings without changing the password, use
+`--login-only`. This keeps the isolated browser open after the helper reaches
+`https://github.com/settings/security`:
+
+```bash
+read -rsp 'Current GitHub password: ' GITHUB_CURRENT_PASSWORD; echo
+export GITHUB_CURRENT_PASSWORD
+python3 skills/github-password-rotator/scripts/rotate_github_password.py \
+  --github-login username \
+  --login-only \
+  --manual-timeout-seconds 900
+unset GITHUB_CURRENT_PASSWORD
+```
+
+Use this mode when the user wants to manually change 2FA, passkeys, recovery
+methods, or other security settings. The helper only logs in, handles sudo
+password confirmation when detected, and stops before any password-change form.
 
 Use environment variables or hidden TTY prompts for both passwords:
 
@@ -53,6 +72,7 @@ The helper:
 - `--settings-url URL`: override GitHub password settings URL.
 - `--manual-timeout-seconds 900`: time allowed for manual verification.
 - `--keep-browser`: keep the isolated browser open after the helper exits.
+- `--login-only`: log in to GitHub security settings without reading a new password or submitting the password-change form; implies `--keep-browser`.
 - `--auto-2fa-fun`: use the hidden TOTP secret with `2fa.fun` to fill GitHub app-code 2FA prompts.
 - `--create-learning-repo`: after password rotation, create a public beginner learning repository named `hello-world-from-<github-login-slug>`.
 - `--dry-run`: print redacted plan and verify script wiring without launching a browser or requiring passwords.
@@ -80,10 +100,14 @@ Dry-run and syntax checks are safe:
 ```bash
 python3 skills/github-password-rotator/scripts/rotate_github_password.py \
   --github-login username \
+  --login-only \
   --dry-run
 
 python3 -m py_compile skills/github-password-rotator/scripts/rotate_github_password.py
 node --check skills/github-password-rotator/scripts/drive_github_password_change.mjs
 ```
 
-For live verification, rely on GitHub's success page, the completed no-flash collapsed form state, or a user-confirmed successful login with the new password. Do not log the password itself.
+For live verification, rely on GitHub's success page, the completed no-flash
+collapsed form state, a `login_completed` status for `--login-only`, or a
+user-confirmed successful login with the new password. Do not log the password
+itself.
