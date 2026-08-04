@@ -149,6 +149,8 @@ bash scripts/start_backend_selfhosted.sh --daemon
 - `master` 建议只跟踪原作者 upstream，减少同步冲突。
 - push 到 `personal/site-build` 会触发 `.github/workflows/deploy.yml` 的前端部署 workflow。
 - 该 workflow 不拉取私有子模块，而是在 runner 中临时裁剪 frontend-only workspace。
+- workflow 的发布目标是 `zero-yx/zero-yx.github.io` 的 `master` 分支。
+- 首次使用前，需要在 `zero-yx/static_flow` 配置 repository secret：`PERSONAL_ACCESS_TOKEN`。
 - 生产域名需要设置 `SITE_BASE_URL=https://your-domain.example`。
 - 如果用反向代理，后端默认监听 `127.0.0.1:39080`，代理转发到该端口即可。
 - GitHub token 只用于生成 Wrapped 页面，不是后端运行必需项。
@@ -158,4 +160,34 @@ bash scripts/start_backend_selfhosted.sh --daemon
 bash scripts/test_github_wrapped.sh
 cargo check -p static-flow-frontend --target wasm32-unknown-unknown
 bash scripts/build_frontend_selfhosted.sh
+```
+
+## 8. 配置 GitHub Pages 发布 secret
+
+`peaceiris/actions-gh-pages` 要把构建产物推到另一个仓库 `zero-yx/zero-yx.github.io`，所以 `zero-yx/static_flow` 自带的 `GITHUB_TOKEN` 不够用，需要一个能写入 Pages 仓库的 token。
+
+推荐创建 fine-grained PAT，权限尽量限制为：
+
+- Repository access: `zero-yx/zero-yx.github.io`
+- Contents: Read and write
+
+然后在本机用 stdin 设置 secret，避免 token 出现在命令历史里：
+
+```bash
+read -r -s PERSONAL_ACCESS_TOKEN
+printf '%s' "$PERSONAL_ACCESS_TOKEN" | gh secret set PERSONAL_ACCESS_TOKEN --repo zero-yx/static_flow --body-file -
+unset PERSONAL_ACCESS_TOKEN
+```
+
+如果你决定复用当前 GitHub CLI 登录 token，也可以这样设置：
+
+```bash
+gh auth token | gh secret set PERSONAL_ACCESS_TOKEN --repo zero-yx/static_flow --body-file -
+```
+
+设置后手动重跑部署：
+
+```bash
+gh workflow run deploy.yml --repo zero-yx/static_flow --ref personal/site-build
+gh run list --repo zero-yx/static_flow --branch personal/site-build --limit 3
 ```
