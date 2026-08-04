@@ -12,6 +12,7 @@ on:
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
       - '.github/workflows/deploy.yml'
+      - 'scripts/prepare_frontend_only_workspace.sh'
   workflow_dispatch:  # 允许手动触发
 
 permissions:
@@ -26,7 +27,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: false
+
+      - name: Prepare frontend-only Cargo workspace
+        run: bash scripts/prepare_frontend_only_workspace.sh
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable

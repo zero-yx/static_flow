@@ -7,7 +7,6 @@
 ```bash
 git clone --branch personal/site-build https://github.com/zero-yx/static_flow.git
 cd static_flow
-git submodule update --init --recursive
 ```
 
 如果你想继续跟踪原作者仓库，可以额外加 upstream：
@@ -16,6 +15,19 @@ git submodule update --init --recursive
 git remote add upstream https://github.com/acking-you/static_flow.git
 git fetch upstream
 ```
+
+这个 fork 目前有两类部署路径：
+
+- 前端/Pages 部署：不需要拉取原作者的私有子模块，GitHub Actions 会临时裁剪成 frontend-only workspace。
+- 完整后端自托管：需要 `deps/` 和 `patches/` 下的 path/submodule 依赖可访问。
+
+如果要完整后端自托管，再执行：
+
+```bash
+git submodule update --init --recursive
+```
+
+如果这里出现 `Repository not found`，说明当前账号无法访问原作者的子模块仓库。解决方式是让原作者授权，或者把这些子模块 mirror 到你自己的可访问仓库后更新 `.gitmodules`。
 
 ## 2. 准备基础工具
 
@@ -73,6 +85,15 @@ scripts/github-wrapped.sh --year 2025
 bash scripts/build_frontend_selfhosted.sh
 ```
 
+如果当前机器没有子模块访问权，并且你只需要构建前端，可以在一次性部署 checkout 中先裁剪 workspace：
+
+```bash
+bash scripts/prepare_frontend_only_workspace.sh --force
+bash scripts/build_frontend_selfhosted.sh
+```
+
+这个命令会修改当前 checkout 的 `Cargo.toml`，适合 CI 或一次性部署目录，不适合在需要继续开发/同步 upstream 的工作区里提交。
+
 构建产物在：
 
 ```text
@@ -82,6 +103,8 @@ crates/frontend/dist
 其中 `crates/frontend/standalone` 下的 Wrapped 页面会被复制到 `crates/frontend/dist/standalone`。
 
 ## 5. 初始化数据目录
+
+本节只适用于完整后端自托管。它要求子模块/path 依赖已经可访问。
 
 后端启动时需要 LanceDB 数据目录。新机器可以先用本地目录：
 
@@ -124,6 +147,8 @@ bash scripts/start_backend_selfhosted.sh --daemon
 
 - `personal/site-build` 用作个人二开部署分支。
 - `master` 建议只跟踪原作者 upstream，减少同步冲突。
+- push 到 `personal/site-build` 会触发 `.github/workflows/deploy.yml` 的前端部署 workflow。
+- 该 workflow 不拉取私有子模块，而是在 runner 中临时裁剪 frontend-only workspace。
 - 生产域名需要设置 `SITE_BASE_URL=https://your-domain.example`。
 - 如果用反向代理，后端默认监听 `127.0.0.1:39080`，代理转发到该端口即可。
 - GitHub token 只用于生成 Wrapped 页面，不是后端运行必需项。
@@ -134,4 +159,3 @@ bash scripts/test_github_wrapped.sh
 cargo check -p static-flow-frontend --target wasm32-unknown-unknown
 bash scripts/build_frontend_selfhosted.sh
 ```
-
