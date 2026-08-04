@@ -57,7 +57,7 @@ pub mod modal {
 }
 
 pub mod footer {
-    pub const COPYRIGHT: &str = "© 2024 L_B__. All rights reserved.";
+    pub const COPYRIGHT: &str = "© 2024 Lancer. All rights reserved.";
     pub const SOCIAL_ARIA: &str = "社交媒体";
 }
 
@@ -76,7 +76,7 @@ pub mod header {
     pub const OPEN_MENU_ARIA: &str = "打开菜单";
     pub const CLOSE_TOOLTIP: &str = "关闭";
     pub const MOBILE_NAV_ARIA: &str = "移动端导航";
-    pub const BRAND_NAME: &str = "L_B__";
+    pub const BRAND_NAME: &str = "Lancer";
 }
 
 pub mod home {

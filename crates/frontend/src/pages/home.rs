@@ -1,3 +1,5 @@
+use gloo_net::http::Request;
+use serde::Deserialize;
 use wasm_bindgen::{prelude::*, JsCast};
 use web_sys::{console, HtmlElement};
 use yew::prelude::*;
@@ -508,11 +510,6 @@ pub fn home_page() -> Html {
                                 </a>
                             </div>
 
-                            // GitHub Wrapped
-                            <div class="terminal-line" style="margin-top: 1.5rem;">
-                                <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
-                                <span class="terminal-content">{ t::CMD_SHOW_WRAPPED }</span>
-                            </div>
                             <GithubWrappedSelector />
 
                             // Blinking cursor
@@ -825,37 +822,67 @@ pub fn home_page() -> Html {
 }
 
 /// GitHub Wrapped year entry
-#[derive(Clone)]
+#[derive(Clone, Deserialize, PartialEq, Eq)]
 struct WrappedYear {
     year: u16,
+    #[serde(default)]
     is_latest: bool,
+    #[serde(default)]
+    url: Option<String>,
 }
 
 impl WrappedYear {
     fn url(&self) -> String {
-        format!("/standalone/github-wrapped-{}.html", self.year)
+        let default_path = format!("standalone/github-wrapped-{}.html", self.year);
+        self.url
+            .as_deref()
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .map(|url| {
+                if url.starts_with("http://") || url.starts_with("https://") {
+                    url.to_string()
+                } else {
+                    crate::config::asset_path(url.trim_start_matches('/'))
+                }
+            })
+            .unwrap_or_else(|| crate::config::asset_path(&default_path))
     }
 }
 
-/// Available GitHub Wrapped years (newest first)
-fn get_wrapped_years() -> Vec<WrappedYear> {
-    vec![
-        WrappedYear {
-            year: 2025,
-            is_latest: true,
-        },
-        WrappedYear {
-            year: 2024,
-            is_latest: false,
-        },
-    ]
+#[derive(Deserialize)]
+struct WrappedManifest {
+    #[serde(default)]
+    years: Vec<WrappedYear>,
 }
 
 #[function_component(GithubWrappedSelector)]
 fn github_wrapped_selector() -> Html {
     let expanded = use_state(|| false);
-    let years = get_wrapped_years();
-    let latest = years.first().cloned();
+    let years = use_state(Vec::<WrappedYear>::new);
+
+    {
+        let years = years.clone();
+        use_effect_with((), move |_| {
+            wasm_bindgen_futures::spawn_local(async move {
+                let manifest_url =
+                    crate::config::asset_path("standalone/github-wrapped-manifest.json");
+                let fetched = match Request::get(&manifest_url).send().await {
+                    Ok(response) if response.ok() => response.json::<WrappedManifest>().await.ok(),
+                    _ => None,
+                };
+
+                if let Some(manifest) = fetched {
+                    let visible_years = manifest
+                        .years
+                        .into_iter()
+                        .filter(|entry| entry.year > 0)
+                        .collect::<Vec<_>>();
+                    years.set(visible_years);
+                }
+            });
+            || ()
+        });
+    }
 
     let toggle_expand = {
         let expanded = expanded.clone();
@@ -905,6 +932,12 @@ fn github_wrapped_selector() -> Html {
         });
     }
 
+    let latest = years
+        .iter()
+        .find(|year| year.is_latest)
+        .cloned()
+        .or_else(|| years.first().cloned());
+
     let Some(latest) = latest else {
         return html! {};
     };
@@ -931,69 +964,75 @@ fn github_wrapped_selector() -> Html {
     }
 
     html! {
-        <div class={classes!("mt-3", "ml-8", "github-wrapped-container")}>
-            <div class="github-wrapped-group" ref={group_ref}>
-                // Main button - always links to latest year
-                <a
-                    href={latest.url()}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    class="github-wrapped-btn"
-                >
-                    <span class="github-wrapped-badge">{ t::GITHUB_WRAPPED_BADGE }</span>
-                    <i class={classes!("fa-brands", "fa-github", "text-xl")} aria-hidden="true"></i>
-                    <span class="github-wrapped-text">
-                        <span class="github-wrapped-title">{ format!("{} GitHub Wrapped", latest.year) }</span>
-                        <span class="github-wrapped-subtitle">{ t::GITHUB_WRAPPED_SUBTITLE }</span>
-                    </span>
-                </a>
-
-                // Expand button (only show if multiple years)
-                if has_multiple_years {
-                    <button
-                        type="button"
-                        class={classes!(
-                            "github-wrapped-expand",
-                            if *expanded { "expanded" } else { "" }
-                        )}
-                        onclick={toggle_expand}
-                        aria-label={t::WRAPPED_MORE_YEARS_ARIA}
-                        aria-expanded={(*expanded).to_string()}
+        <>
+            <div class="terminal-line" style="margin-top: 1.5rem;">
+                <span class="terminal-prompt">{ common_text::TERMINAL_PROMPT_CMD }</span>
+                <span class="terminal-content">{ t::CMD_SHOW_WRAPPED }</span>
+            </div>
+            <div class={classes!("mt-3", "ml-8", "github-wrapped-container")}>
+                <div class="github-wrapped-group" ref={group_ref}>
+                    // Main button - always links to latest year
+                    <a
+                        href={latest.url()}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="github-wrapped-btn"
                     >
-                        <i class="fas fa-chevron-down" aria-hidden="true"></i>
-                    </button>
+                        <span class="github-wrapped-badge">{ t::GITHUB_WRAPPED_BADGE }</span>
+                        <i class={classes!("fa-brands", "fa-github", "text-xl")} aria-hidden="true"></i>
+                        <span class="github-wrapped-text">
+                            <span class="github-wrapped-title">{ format!("{} GitHub Wrapped", latest.year) }</span>
+                            <span class="github-wrapped-subtitle">{ t::GITHUB_WRAPPED_SUBTITLE }</span>
+                        </span>
+                    </a>
+
+                    // Expand button (only show if multiple years)
+                    if has_multiple_years {
+                        <button
+                            type="button"
+                            class={classes!(
+                                "github-wrapped-expand",
+                                if *expanded { "expanded" } else { "" }
+                            )}
+                            onclick={toggle_expand}
+                            aria-label={t::WRAPPED_MORE_YEARS_ARIA}
+                            aria-expanded={(*expanded).to_string()}
+                        >
+                            <i class="fas fa-chevron-down" aria-hidden="true"></i>
+                        </button>
+                    }
+                </div>
+
+                // Dropdown with all years
+                if has_multiple_years && *expanded {
+                    <div
+                        class="github-wrapped-dropdown"
+                        style={(*dropdown_style).clone()}
+                        onclick={close_dropdown.reform(|e: MouseEvent| e.stop_propagation())}
+                    >
+                        <div class="github-wrapped-dropdown-header">
+                            { t::WRAPPED_SELECT_YEAR }
+                        </div>
+                        { for years.iter().map(|y| html! {
+                            <a
+                                href={y.url()}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                class={classes!(
+                                    "github-wrapped-dropdown-item",
+                                    if y.is_latest { "latest" } else { "" }
+                                )}
+                            >
+                                <i class="fa-brands fa-github" aria-hidden="true"></i>
+                                <span>{ format!("{} Wrapped", y.year) }</span>
+                                if y.is_latest {
+                                    <span class="github-wrapped-latest-tag">{ t::WRAPPED_LATEST_TAG }</span>
+                                }
+                            </a>
+                        }) }
+                    </div>
                 }
             </div>
-
-            // Dropdown with all years
-            if has_multiple_years && *expanded {
-                <div
-                    class="github-wrapped-dropdown"
-                    style={(*dropdown_style).clone()}
-                    onclick={close_dropdown.reform(|e: MouseEvent| e.stop_propagation())}
-                >
-                    <div class="github-wrapped-dropdown-header">
-                        { t::WRAPPED_SELECT_YEAR }
-                    </div>
-                    { for years.iter().map(|y| html! {
-                        <a
-                            href={y.url()}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            class={classes!(
-                                "github-wrapped-dropdown-item",
-                                if y.is_latest { "latest" } else { "" }
-                            )}
-                        >
-                            <i class="fa-brands fa-github" aria-hidden="true"></i>
-                            <span>{ format!("{} Wrapped", y.year) }</span>
-                            if y.is_latest {
-                                <span class="github-wrapped-latest-tag">{ t::WRAPPED_LATEST_TAG }</span>
-                            }
-                        </a>
-                    }) }
-                </div>
-            }
-        </div>
+        </>
     }
 }
