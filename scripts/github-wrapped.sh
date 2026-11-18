@@ -460,6 +460,7 @@ def render_html(dataset):
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
+  <link rel="icon" href="/static/zero-yx.svg" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{esc(login)} · GitHub Wrapped {esc(year)}</title>
   <meta name="description" content="GitHub Wrapped {esc(year)} for {esc(login)}" />
