@@ -8,4 +8,11 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+
+# The upstream ONNX archive requires symbols newer than Ubuntu 20.04's glibc.
+# Linux instead loads the ABI-compatible wheel's libonnxruntime via ORT_DYLIB_PATH.
+[target.'cfg(target_os = "linux")'.dependencies]
+fastembed = { version = "5", default-features = false, features = ["hf-hub-native-tls", "image-models", "ort-load-dynamic"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
 fastembed = "5"

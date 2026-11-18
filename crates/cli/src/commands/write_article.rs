@@ -269,7 +269,9 @@ pub async fn run(db_path: &Path, file: &Path, options: WriteArticleOptions) -> R
             } else {
                 anyhow::bail!("--vector does not match English or Chinese dimensions");
             }
-        } else {
+        } else if std::env::var_os("STATICFLOW_SKIP_TEXT_EMBEDDING").as_deref()
+            != Some(std::ffi::OsStr::new("1"))
+        {
             match language {
                 TextEmbeddingLanguage::English => {
                     match embed_text_with_language(&combined_text, TextEmbeddingLanguage::English) {

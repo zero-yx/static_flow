@@ -6,7 +6,8 @@ build="${XDG_CACHE_HOME:-$HOME/.cache}/zero-yx-staticflow"
 mkdir -p "$build" "$repo/.local"
 stage="$(mktemp -d "$build/src.XXXXXXXX")"
 out="$(mktemp -d "$repo/.local/site-build.XXXXXXXX")"
-git -C "$repo" -c safe.directory="$repo" archive HEAD | tar -xf - -C "$stage"
+revision="$(git -C "$repo" -c safe.directory="$repo" rev-parse HEAD)"
+git -C "$repo" -c safe.directory="$repo" archive "$revision" | tar -xf - -C "$stage"
 cd "$stage"
 bash scripts/prepare_frontend_only_workspace.sh --force
 cd crates/frontend
@@ -25,4 +26,4 @@ if test -d "$repo/.local/site"; then
 else
   mv -T "$out" "$repo/.local/site"
 fi
-echo "Published $repo/.local/site from $(git -C "$repo" rev-parse --short HEAD)"
+echo "Published $repo/.local/site from $revision"
