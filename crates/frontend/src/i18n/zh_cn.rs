@@ -57,7 +57,7 @@ pub mod modal {
 }
 
 pub mod footer {
-    pub const COPYRIGHT: &str = "© 2024 Lancer. All rights reserved.";
+    pub const COPYRIGHT: &str = "zero-yx · Built with StaticFlow";
     pub const SOCIAL_ARIA: &str = "社交媒体";
 }
 
@@ -76,7 +76,7 @@ pub mod header {
     pub const OPEN_MENU_ARIA: &str = "打开菜单";
     pub const CLOSE_TOOLTIP: &str = "关闭";
     pub const MOBILE_NAV_ARIA: &str = "移动端导航";
-    pub const BRAND_NAME: &str = "Lancer";
+    pub const BRAND_NAME: &str = "zero-yx";
 }
 
 pub mod home {
@@ -92,12 +92,10 @@ pub mod home {
     pub const AVATAR_LINK_SR: &str = "前往文章列表";
 
     pub const CMD_SHOW_MOTTO: &str = "echo $MOTTO";
-    pub const MOTTO: &str = "El Psy Kongroo | Rustacean | 痴迷底层黑魔法的 Database 练习生";
+    pub const MOTTO: &str = "zero-yx / 个人技术站";
 
     pub const CMD_SHOW_README: &str = "cat ./README.md";
-    pub const INTRO: &str = "本地优先的全栈 Rust 内容平台 — 文章 · 音乐 · 图片统一托管于 \
-                             LanceDB，支持全文 / 语义 / 混合检索，结合 AI Skill \
-                             工作流驱动内容创作与自动化运维";
+    pub const INTRO: &str = "这里存放技术笔记、项目记录和 GitHub 年度回顾。";
 
     pub const CMD_SHOW_LLM_ACCESS: &str = "cat ./llm-access.md";
     pub const LLM_ACCESS_HINT: &str =

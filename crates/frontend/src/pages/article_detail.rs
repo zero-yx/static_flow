@@ -492,7 +492,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                         let has_article = data.is_some();
                         article.set(data);
                         loading.set(false);
-                        if has_article {
+                        if has_article && !cfg!(feature = "personal-notes") {
                             match track_article_view(&id).await {
                                 Ok(metrics) => {
                                     let daily_points = metrics.daily_points.clone();
@@ -582,6 +582,12 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
             }
 
             wasm_bindgen_futures::spawn_local(async move {
+                if cfg!(feature = "personal-notes") {
+                    comments.set(vec![]);
+                    comments_total.set(0);
+                    comments_loading.set(false);
+                    return;
+                }
                 let list_result = fetch_article_comments(&id, Some(80)).await;
                 let stats_result = fetch_article_comment_stats(&id).await;
 
@@ -2751,7 +2757,8 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                     class={classes!(
                                         "comment-compose-textarea"
                                     )}
-                                    placeholder={"写下你对本文的疑问、勘误或补充建议..."}
+                                    disabled={cfg!(feature = "personal-notes")}
+                                    placeholder={if cfg!(feature = "personal-notes") { "本机只读" } else { "写下你对本文的疑问、勘误或补充建议..." }}
                                     value={(*footer_comment_input).clone()}
                                     oninput={on_footer_comment_input}
                                 />
@@ -2765,7 +2772,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                             };
                                             html! { <span class={status_class}>{ message }</span> }
                                         } else {
-                                            html! { <span class={classes!("text-sm", "text-[var(--muted)]")}>{ "每个用户每分钟最多提交 1 条评论。" }</span> }
+                                            html! { <span class={classes!("text-sm", "text-[var(--muted)]")}>{ if cfg!(feature = "personal-notes") { "本机文章站仅供阅读，未开放评论。" } else { "每个用户每分钟最多提交 1 条评论。" } }</span> }
                                         }
                                     }
                                     <button
@@ -2776,7 +2783,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                             "py-2"
                                         )}
                                         onclick={submit_footer_comment_click}
-                                        disabled={*footer_submit_loading}
+                                        disabled={cfg!(feature = "personal-notes") || *footer_submit_loading}
                                     >
                                         {
                                             if *footer_submit_loading {
@@ -3464,7 +3471,7 @@ pub fn article_detail_page(props: &ArticleDetailProps) -> Html {
                                         type="button"
                                         class={classes!("btn-fluent-primary", "px-4", "py-2")}
                                         onclick={submit_selection_comment_click}
-                                        disabled={*selection_submit_loading}
+                                        disabled={cfg!(feature = "personal-notes") || *selection_submit_loading}
                                     >
                                         {
                                             if *selection_submit_loading {

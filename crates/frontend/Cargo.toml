@@ -44,6 +44,7 @@ static-flow-shared = { path = "../shared" }
 static-flow-media-types = { path = "../media-types" }
 
 [features]
+personal-notes = []
 default = ["local-media"]
 local-media = []
 mock = []

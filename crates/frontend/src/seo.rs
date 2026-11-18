@@ -5,8 +5,8 @@ use web_sys::{window, Document, Element};
 use crate::{config, router::Route, utils::image_url};
 
 const SITE_NAME: &str = "StaticFlow";
-const SITE_BASE_URL: &str = "https://acking-you.github.io";
-const DEFAULT_AUTHOR: &str = "ackingliu";
+const SITE_BASE_URL: &str = "https://zero-yx.github.io";
+const DEFAULT_AUTHOR: &str = "zero-yx";
 const DEFAULT_OG_IMAGE: &str = "/static/android-chrome-512x512.png";
 const DEFAULT_DESCRIPTION: &str = "本地优先的个人内容平台：文章、音乐、视频统一托管于 \
                                    LanceDB，支持全文 / 语义 / 混合检索，结合 AI + Skill \
@@ -336,7 +336,7 @@ pub fn apply_route_seo(route: Option<&Route>) {
     match active_route {
         Route::Home => {
             apply_common_seo(
-                "StaticFlow · AI + Skill 驱动的本地优先内容平台",
+                "zero-yx · 个人技术站",
                 DEFAULT_DESCRIPTION,
                 &canonical_url,
                 "website",
